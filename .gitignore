@@ -1,0 +1,41 @@
+# Build and IDE output
+build/
+build*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+.cache/
+.vscode/
+
+# Python environments and generated artifacts
+.venv/
+__pycache__/
+*.py[cod]
+runs/
+recordings/
+downloads/
+
+# Datasets, media, and trained model artifacts
+data/
+data_*/
+armor_pose_dataset/
+cvat_import/
+*.pt
+*.onnx
+*.engine
+*.bmp
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+
+# Platform-specific binaries and dependencies
+*.dll
+*.exe
+*.lib
+*.pdb
+*.obj
+vcpkg_installed/
+Model/

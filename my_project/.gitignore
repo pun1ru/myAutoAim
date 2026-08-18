@@ -1,0 +1,6 @@
+/build/
+/downloads/vcpkg/
+/vcpkg_installed/
+/.vs/
+*.user
+*.suo
