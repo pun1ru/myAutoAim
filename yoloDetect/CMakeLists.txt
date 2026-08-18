@@ -6,41 +6,87 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(DaedalusSimSdk 1.1 REQUIRED CONFIG)
+find_package(DaedalusSimSdk 1.3.1 REQUIRED CONFIG)
 find_package(OpenCV 4 REQUIRED COMPONENTS core highgui imgcodecs imgproc videoio)
+find_package(Threads REQUIRED)
 
-include(FetchContent)
 set(ONNXRUNTIME_VERSION "1.23.2")
-FetchContent_Declare(onnxruntime_archive
-  URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}.zip"
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
-FetchContent_MakeAvailable(onnxruntime_archive)
+if(WIN32)
+  set(ONNXRUNTIME_PACKAGE_NAME
+      "onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}")
+  set(ONNXRUNTIME_ARCHIVE
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}.zip")
+else()
+  set(ONNXRUNTIME_PACKAGE_NAME
+      "onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
+  set(ONNXRUNTIME_ARCHIVE
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz")
+endif()
+set(ONNXRUNTIME_DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/_deps")
+set(ONNXRUNTIME_ARCHIVE_PATH
+    "${ONNXRUNTIME_DOWNLOAD_DIR}/${ONNXRUNTIME_PACKAGE_NAME}.archive")
+set(onnxruntime_archive_SOURCE_DIR
+    "${ONNXRUNTIME_DOWNLOAD_DIR}/${ONNXRUNTIME_PACKAGE_NAME}")
+if(NOT EXISTS "${onnxruntime_archive_SOURCE_DIR}/include/onnxruntime_cxx_api.h")
+  file(MAKE_DIRECTORY "${ONNXRUNTIME_DOWNLOAD_DIR}")
+  message(STATUS "Downloading ONNX Runtime ${ONNXRUNTIME_VERSION}")
+  file(DOWNLOAD "${ONNXRUNTIME_ARCHIVE}" "${ONNXRUNTIME_ARCHIVE_PATH}"
+      TLS_VERIFY ON SHOW_PROGRESS STATUS ONNXRUNTIME_DOWNLOAD_STATUS)
+  list(GET ONNXRUNTIME_DOWNLOAD_STATUS 0 ONNXRUNTIME_DOWNLOAD_RESULT)
+  list(GET ONNXRUNTIME_DOWNLOAD_STATUS 1 ONNXRUNTIME_DOWNLOAD_MESSAGE)
+  if(NOT ONNXRUNTIME_DOWNLOAD_RESULT EQUAL 0)
+    message(FATAL_ERROR "ONNX Runtime download failed: ${ONNXRUNTIME_DOWNLOAD_MESSAGE}")
+  endif()
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E tar xf "${ONNXRUNTIME_ARCHIVE_PATH}"
+    WORKING_DIRECTORY "${ONNXRUNTIME_DOWNLOAD_DIR}"
+    RESULT_VARIABLE ONNXRUNTIME_EXTRACT_RESULT
+  )
+  if(NOT ONNXRUNTIME_EXTRACT_RESULT EQUAL 0)
+    message(FATAL_ERROR "ONNX Runtime archive extraction failed")
+  endif()
+endif()
 
 add_library(onnxruntime SHARED IMPORTED GLOBAL)
-set_target_properties(onnxruntime PROPERTIES
-  IMPORTED_IMPLIB "${onnxruntime_archive_SOURCE_DIR}/lib/onnxruntime.lib"
-  IMPORTED_LOCATION "${onnxruntime_archive_SOURCE_DIR}/lib/onnxruntime.dll"
-  INTERFACE_INCLUDE_DIRECTORIES "${onnxruntime_archive_SOURCE_DIR}/include"
-)
+if(WIN32)
+  set_target_properties(onnxruntime PROPERTIES
+    IMPORTED_IMPLIB "${onnxruntime_archive_SOURCE_DIR}/lib/onnxruntime.lib"
+    IMPORTED_LOCATION "${onnxruntime_archive_SOURCE_DIR}/lib/onnxruntime.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${onnxruntime_archive_SOURCE_DIR}/include"
+  )
+else()
+  set_target_properties(onnxruntime PROPERTIES
+    IMPORTED_LOCATION "${onnxruntime_archive_SOURCE_DIR}/lib/libonnxruntime.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${onnxruntime_archive_SOURCE_DIR}/include"
+  )
+endif()
 
-set(YOLO_DETECT_CUDA_LIBRARY_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/../trains/.venv/Lib/site-packages/torch/lib")
-if(NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudart64_12.dll" OR
-   NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudnn64_9.dll")
-  message(FATAL_ERROR
-      "CUDA 12/cuDNN 9 runtime DLLs were not found in ${YOLO_DETECT_CUDA_LIBRARY_DIR}")
+if(WIN32)
+  set(YOLO_DETECT_CUDA_LIBRARY_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/../trains/.venv/Lib/site-packages/torch/lib")
+  if(NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudart64_12.dll" OR
+     NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudnn64_9.dll")
+    message(FATAL_ERROR
+        "CUDA 12/cuDNN 9 runtime DLLs were not found in ${YOLO_DETECT_CUDA_LIBRARY_DIR}")
+  endif()
+else()
+  set(YOLO_DETECT_CUDA_LIBRARY_DIR "")
 endif()
 
 add_executable(yolo_detect
     src/app/main.cpp
     src/detection/yolo_pose_detector.cpp
+    src/web/mjpeg_server.cpp
 )
+if(UNIX AND NOT APPLE)
+  target_sources(yolo_detect PRIVATE src/sdk/glibc_compat.cpp)
+endif()
 target_include_directories(yolo_detect PRIVATE src ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(yolo_detect PRIVATE
     DaedalusSimSdk::DaedalusSimSdk
     onnxruntime
     ${OpenCV_LIBS}
+    Threads::Threads
 )
 target_compile_definitions(yolo_detect PRIVATE
     YOLO_DETECT_DEFAULT_CUDA_LIB_DIR="${YOLO_DETECT_CUDA_LIBRARY_DIR}"
@@ -76,6 +122,34 @@ if(WIN32)
         $<TARGET_FILE_DIR:yolo_detect>
     )
   endif()
+endif()
+
+if(UNIX AND NOT APPLE)
+  file(GLOB YOLO_DETECT_ONNXRUNTIME_LIBRARIES
+      "${onnxruntime_archive_SOURCE_DIR}/lib/libonnxruntime*.so*")
+  add_custom_command(TARGET yolo_detect POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${YOLO_DETECT_ONNXRUNTIME_LIBRARIES}
+      "$<TARGET_FILE_DIR:yolo_detect>"
+    COMMAND_EXPAND_LISTS
+  )
+  foreach(YOLO_DETECT_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/models/armor_pose.onnx"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../RobotDetectionModel/Model/0526.onnx")
+    if(EXISTS "${YOLO_DETECT_MODEL}")
+      get_filename_component(YOLO_DETECT_MODEL_NAME
+          "${YOLO_DETECT_MODEL}" NAME)
+      if(YOLO_DETECT_MODEL_NAME STREQUAL "0526.onnx")
+        set(YOLO_DETECT_MODEL_NAME "robot_armor_0526.onnx")
+      endif()
+      add_custom_command(TARGET yolo_detect POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${YOLO_DETECT_MODEL}"
+          "$<TARGET_FILE_DIR:yolo_detect>/${YOLO_DETECT_MODEL_NAME}"
+      )
+    endif()
+  endforeach()
+  set_target_properties(yolo_detect PROPERTIES BUILD_RPATH "$ORIGIN")
 endif()
 
 if(MSVC)

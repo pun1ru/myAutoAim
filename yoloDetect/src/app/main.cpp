@@ -1,4 +1,5 @@
 #include "detection/yolo_pose_detector.hpp"
+#include "web/mjpeg_server.hpp"
 
 #include <daedalus_sim_sdk/scene_control_client.hpp>
 #include <daedalus_sim_sdk/tcp_image_client.hpp>
@@ -42,6 +43,9 @@ struct Options {
   float nms = 0.45F;
   int input_size = 640;
   int display_width = 1100;
+  std::uint16_t web_port = 0;
+  std::string web_bind = "127.0.0.1";
+  int web_jpeg_quality = 80;
   std::uint8_t target = 3;
   float vehicle_speed = 1.5F;
   float speed_step = 0.25F;
@@ -94,6 +98,9 @@ void printUsage() {
       << "  --nms <0..1>         NMS IoU threshold (default: 0.45)\n"
       << "  --imgsz <pixels>     Square model input size (default: 640)\n"
       << "  --width <pixels>     Display width (default: 1100)\n"
+      << "  --web <port>         Serve annotated MJPEG frames over HTTP\n"
+      << "  --web-bind <address> Web bind address (default: 127.0.0.1)\n"
+      << "  --web-quality <1..100> JPEG quality for --web (default: 80)\n"
       << "  --target <0..255>    Shooting-range vehicle ID (default: 3)\n"
       << "  --speed <m/s>        Initial vehicle speed (default: 1.5)\n"
       << "  --speed-step <m/s>   +/- adjustment step (default: 0.25)\n"
@@ -176,6 +183,22 @@ Options parseOptions(int argc, char** argv) {
       options.display_width = std::stoi(requireValue(index, argc, argv));
       if (options.display_width < 320 || options.display_width > 3840) {
         throw std::runtime_error("width must be in [320, 3840]");
+      }
+    } else if (argument == "--web") {
+      const int value = std::stoi(requireValue(index, argc, argv));
+      if (value < 1 || value > 65535) {
+        throw std::runtime_error("web port must be in [1, 65535]");
+      }
+      options.web_port = static_cast<std::uint16_t>(value);
+    } else if (argument == "--web-bind") {
+      options.web_bind = requireValue(index, argc, argv);
+      if (options.web_bind.empty()) {
+        throw std::runtime_error("web-bind must not be empty");
+      }
+    } else if (argument == "--web-quality") {
+      options.web_jpeg_quality = std::stoi(requireValue(index, argc, argv));
+      if (options.web_jpeg_quality < 1 || options.web_jpeg_quality > 100) {
+        throw std::runtime_error("web-quality must be in [1, 100]");
       }
     } else if (argument == "--target") {
       const int value = std::stoi(requireValue(index, argc, argv));
@@ -438,6 +461,20 @@ int main(int argc, char** argv) {
     return 3;
   }
 
+  std::unique_ptr<yolo_detect::MjpegServer> web_server;
+  if (options.web_port != 0) {
+    try {
+      web_server = std::make_unique<yolo_detect::MjpegServer>(
+          yolo_detect::WebServerOptions{options.web_bind, options.web_port,
+                                        options.web_jpeg_quality});
+      std::cout << "web debug stream: " << web_server->url()
+                << " (open /stream.mjpg for the raw MJPEG endpoint)\n";
+    } catch (const std::exception& error) {
+      std::cerr << "web server start failed: " << error.what() << '\n';
+      return 5;
+    }
+  }
+
   SceneState scene_state;
   scene_state.target = options.target;
   scene_state.vehicle_speed = options.vehicle_speed;
@@ -662,7 +699,7 @@ int main(int argc, char** argv) {
                        : inference_ms * 0.9 + current_inference_ms * 0.1;
     latest_detection_count = detections.size();
 
-    if (!options.no_display || !options.record_path.empty()) {
+    if (!options.no_display || !options.record_path.empty() || web_server) {
       cv::Mat annotated = bgr.clone();
       for (const auto& detection : detections) {
         drawDetection(annotated, detection, options.keypoint_confidence);
@@ -701,6 +738,8 @@ int main(int argc, char** argv) {
       drawText(annotated, control_message, 5,
              control_ok ? cv::Scalar(80, 255, 120)
                         : cv::Scalar(80, 180, 255));
+
+      if (web_server) web_server->publish(annotated);
 
       if (!options.record_path.empty()) {
         if (!recorder_opened) {

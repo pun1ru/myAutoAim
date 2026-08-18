@@ -20,11 +20,12 @@ The source tree follows the current auto-aim pipeline boundaries:
 src/
   app/          Application entry point and simulator/inference orchestration
   detection/    YOLO pose model adapter and armor detection results
+  web/          Headless HTTP/MJPEG debug stream
   test/         Detector smoke and inference regression tests
 ```
 
 `app` currently owns the end-to-end loop, including TCP frame acquisition,
-scene control, display, and recording. PnP, tracking, prediction, ballistics,
+scene control, display, recording, and browser debug streaming. PnP, tracking, prediction, ballistics,
 and gimbal output are not implemented in this executable yet; their future
 implementations should become separate `pose`, `tracking`, `prediction`,
 `ballistics`, and `control` directories instead of expanding the detector
@@ -44,6 +45,17 @@ The build copies `models/armor_pose.onnx` and all required runtime DLLs next to
 the executable. CUDA 12.6 and cuDNN 9 runtime DLLs are loaded from
 `trains/.venv/Lib/site-packages/torch/lib`, so keep the training virtual
 environment available when running this local build.
+
+For the deployed Daedalus 1.3.1 AutoDL environment, use the Linux preset:
+
+```bash
+cd /root/autoaim-dev/myAutoAim/yoloDetect
+cmake --preset linux-autodl
+cmake --build build/linux-autodl --parallel
+```
+
+The Linux build copies locally available ONNX models and ONNX Runtime provider
+libraries next to `build/linux-autodl/yolo_detect`.
 
 ## Run
 
@@ -72,6 +84,30 @@ after training a production model:
 
 Run `yolo_detect.exe --help` for all connection, model, threshold, and display
 options. Press Q or Escape to close the visualization window.
+
+## Headless web debugging
+
+On a server without a desktop, use `--no-display --web` to publish the same
+annotated frame used by the local OpenCV window as an MJPEG stream:
+
+```bash
+./yolo_detect --no-display --web 8080
+```
+
+The web server binds to `127.0.0.1` by default, so it is not exposed publicly.
+From Windows, forward the port through SSH and open the printed URL in a local
+browser:
+
+```powershell
+ssh -N -L 8080:127.0.0.1:8080 autodl-4090
+```
+
+Then browse to `http://127.0.0.1:8080/`. The raw stream and a single JPEG are
+also available at `/stream.mjpg` and `/snapshot.jpg`. To deliberately expose
+the stream on a trusted private network, add `--web-bind 0.0.0.0`.
+
+The JPEG quality is configurable with `--web-quality <1..100>` (default 80).
+Web mode draws and encodes annotated frames even when `--no-display` is set.
 
 ## Scene and vehicle controls
 
