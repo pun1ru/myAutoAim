@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
@@ -86,15 +87,50 @@ std::string htmlPage() {
   h1 { margin: 0; font-size: 18px; font-weight: 600; }
   main { padding: 16px; }
   img { display: block; width: min(100%, 1400px); height: auto; background: #090b0d; }
-  p { color: #aab7c0; font-size: 14px; }
+  p, #status { color: #aab7c0; font-size: 14px; }
+  .controls { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); max-width: 760px; margin: 16px 0; }
+  button { min-height: 38px; border: 1px solid #52616b; border-radius: 4px; background: #273139; color: #eef3f6; cursor: pointer; font: inherit; }
+  button:hover { background: #34434e; }
+  button.scene { border-color: #2f9d76; }
+  button.stop { border-color: #c65b56; }
 </style>
 </head>
 <body>
 <header><h1>YOLO Armor Debug Stream</h1></header>
 <main>
 <img src="/stream.mjpg" alt="Waiting for detector frames">
-<p>Annotated frames are streamed directly from yolo_detect.</p>
+<section class="controls" aria-label="Simulator controls">
+  <button class="scene" data-action="scene-shooting-range">Shooting Range</button>
+  <button class="scene" data-action="scene-energy">Energy</button>
+  <button data-action="reset">Reset Scene</button>
+  <button class="stop" data-action="motion-stop">Stop Vehicle</button>
+  <button data-action="motion-linear">Linear</button>
+  <button data-action="motion-spin">Spin</button>
+  <button data-action="motion-linear-spin">Linear + Spin</button>
+  <button data-action="speed-down">Speed -</button>
+  <button data-action="speed-up">Speed +</button>
+</section>
+<p id="status">Controls are sent to the detector command queue.</p>
 </main>
+<script>
+const status = document.getElementById('status');
+for (const button of document.querySelectorAll('[data-action]')) {
+  button.addEventListener('click', async () => {
+    const action = button.dataset.action;
+    button.disabled = true;
+    status.textContent = 'Sending ' + action + '...';
+    try {
+      const response = await fetch('/api/control?action=' + encodeURIComponent(action), { cache: 'no-store' });
+      const result = await response.json();
+      status.textContent = result.message;
+    } catch (_) {
+      status.textContent = 'Control request failed.';
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+</script>
 </body>
 </html>
 )";
@@ -111,6 +147,7 @@ struct MjpegServer::State {
   std::condition_variable frame_ready;
   std::vector<unsigned char> latest_jpeg;
   std::uint64_t frame_sequence = 0;
+  ControlHandler control_handler;
 #ifdef _WIN32
   std::unique_ptr<WinsockSession> winsock;
 #endif
@@ -121,6 +158,31 @@ namespace {
 void sendNotFound(Socket client) {
   sendText(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
                    "Connection: close\r\n\r\n");
+}
+
+void sendJson(Socket client, int status, const char* message) {
+  const std::string body = std::string("{\"message\":\"") + message + "\"}";
+  const std::string reason = status == 202 ? "Accepted" : "Bad Request";
+  sendText(client, "HTTP/1.1 " + std::to_string(status) + " " + reason +
+                   "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                   "Content-Length: " + std::to_string(body.size()) +
+                   "\r\nConnection: close\r\n\r\n" + body);
+}
+
+std::string controlAction(const std::string& request) {
+  const std::size_t path_end = request.find(' ', 4);
+  if (path_end == std::string::npos) return {};
+  const std::string target = request.substr(4, path_end - 4);
+  constexpr std::string_view kPrefix = "/api/control?action=";
+  if (target.rfind(kPrefix, 0) != 0) return {};
+  std::string action = target.substr(kPrefix.size());
+  const std::size_t next_parameter = action.find('&');
+  if (next_parameter != std::string::npos) action.resize(next_parameter);
+  if (action.empty() || action.size() > 64) return {};
+  for (const unsigned char character : action) {
+    if (!std::isalnum(character) && character != '-') return {};
+  }
+  return action;
 }
 
 void streamFrames(Socket client, const std::shared_ptr<MjpegServer::State>& state) {
@@ -174,6 +236,7 @@ void handleClient(Socket client, const std::shared_ptr<MjpegServer::State>& stat
                         request_line.rfind("GET /HTTP", 0) == 0;
   const bool get_stream = request_line.rfind("GET /stream.mjpg ", 0) == 0;
   const bool get_snapshot = request_line.rfind("GET /snapshot.jpg ", 0) == 0;
+  const std::string action = controlAction(request_line);
 
   if (get_root) {
     const std::string page = htmlPage();
@@ -199,6 +262,11 @@ void handleClient(Socket client, const std::shared_ptr<MjpegServer::State>& stat
       sendText(client, header);
       sendAll(client, jpeg.data(), jpeg.size());
     }
+  } else if (!action.empty()) {
+    const bool accepted = state->running.load() && state->control_handler &&
+                          state->control_handler(action);
+    sendJson(client, accepted ? 202 : 400,
+             accepted ? "Control command queued." : "Unknown control command.");
   } else {
     sendNotFound(client);
   }
@@ -226,12 +294,14 @@ void acceptClients(const std::shared_ptr<MjpegServer::State>& state) {
 
 }  // namespace
 
-MjpegServer::MjpegServer(WebServerOptions options) : state_(std::make_shared<State>()) {
+MjpegServer::MjpegServer(WebServerOptions options, ControlHandler control_handler)
+    : state_(std::make_shared<State>()) {
   if (options.port == 0) throw std::invalid_argument("web port must be non-zero");
   if (options.jpeg_quality < 1 || options.jpeg_quality > 100) {
     throw std::invalid_argument("web JPEG quality must be in [1, 100]");
   }
   state_->options = std::move(options);
+  state_->control_handler = std::move(control_handler);
 #ifdef _WIN32
   state_->winsock = std::make_unique<WinsockSession>();
 #endif

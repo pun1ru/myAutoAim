@@ -109,6 +109,13 @@ the stream on a trusted private network, add `--web-bind 0.0.0.0`.
 The JPEG quality is configurable with `--web-quality <1..100>` (default 80).
 Web mode draws and encodes annotated frames even when `--no-display` is set.
 
+The page also exposes the simulator controls that were previously available by
+keyboard in the OpenCV window: Shooting Range, Energy, reset, vehicle motion,
+and speed adjustment. Commands are queued and executed on the detector thread,
+so the browser never accesses the Daedalus SDK concurrently. Daedalus 1.3.1
+contest builds only expose Shooting Range and Energy; unavailable scenes are
+not shown on the web page.
+
 ## Scene and vehicle controls
 
 The visualization window also owns a Daedalus scene-control session. Click the

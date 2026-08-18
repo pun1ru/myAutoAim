@@ -13,10 +13,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -461,20 +463,6 @@ int main(int argc, char** argv) {
     return 3;
   }
 
-  std::unique_ptr<yolo_detect::MjpegServer> web_server;
-  if (options.web_port != 0) {
-    try {
-      web_server = std::make_unique<yolo_detect::MjpegServer>(
-          yolo_detect::WebServerOptions{options.web_bind, options.web_port,
-                                        options.web_jpeg_quality});
-      std::cout << "web debug stream: " << web_server->url()
-                << " (open /stream.mjpg for the raw MJPEG endpoint)\n";
-    } catch (const std::exception& error) {
-      std::cerr << "web server start failed: " << error.what() << '\n';
-      return 5;
-    }
-  }
-
   SceneState scene_state;
   scene_state.target = options.target;
   scene_state.vehicle_speed = options.vehicle_speed;
@@ -599,6 +587,71 @@ int main(int argc, char** argv) {
     if (control_ok) scene_state = next;
   };
 
+  std::mutex web_command_mutex;
+  std::deque<std::string> web_commands;
+  const auto queueWebCommand = [&](std::string_view action) {
+    constexpr std::array<std::string_view, 9> kKnownActions = {
+        "scene-shooting-range", "scene-energy", "reset", "motion-stop",
+        "motion-linear", "motion-spin", "motion-linear-spin", "speed-down",
+        "speed-up"};
+    if (std::find(kKnownActions.begin(), kKnownActions.end(), action) ==
+        kKnownActions.end()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(web_command_mutex);
+    web_commands.emplace_back(action);
+    return true;
+  };
+
+  const auto processWebCommands = [&] {
+    std::deque<std::string> pending;
+    {
+      std::lock_guard<std::mutex> lock(web_command_mutex);
+      pending.swap(web_commands);
+    }
+    for (const std::string& action : pending) {
+      if (action == "scene-shooting-range") {
+        requestScene(daedalus_sdk::SceneMode::ShootingRange, "shooting-range");
+        if (control_ok) requestMotion(scene_state.motion);
+      } else if (action == "scene-energy") {
+        requestScene(daedalus_sdk::SceneMode::Energy, "energy");
+      } else if (action == "reset" && control_available) {
+        control_ok = reportControl(scene->resetScene(), "resetScene",
+                                   control_message);
+        if (control_ok) {
+          scene_state.motion = daedalus_sdk::RangeMotionMode::Stationary;
+        }
+      } else if (action == "motion-stop") {
+        requestMotion(daedalus_sdk::RangeMotionMode::Stationary);
+      } else if (action == "motion-linear") {
+        requestMotion(daedalus_sdk::RangeMotionMode::Linear);
+      } else if (action == "motion-spin") {
+        requestMotion(daedalus_sdk::RangeMotionMode::Spin);
+      } else if (action == "motion-linear-spin") {
+        requestMotion(daedalus_sdk::RangeMotionMode::LinearAndSpin);
+      } else if (action == "speed-down") {
+        adjustVehicleSpeed(-options.speed_step);
+      } else if (action == "speed-up") {
+        adjustVehicleSpeed(options.speed_step);
+      }
+    }
+  };
+
+  std::unique_ptr<yolo_detect::MjpegServer> web_server;
+  if (options.web_port != 0) {
+    try {
+      web_server = std::make_unique<yolo_detect::MjpegServer>(
+          yolo_detect::WebServerOptions{options.web_bind, options.web_port,
+                                        options.web_jpeg_quality},
+          queueWebCommand);
+      std::cout << "web debug stream: " << web_server->url()
+                << " (open /stream.mjpg for the raw MJPEG endpoint)\n";
+    } catch (const std::exception& error) {
+      std::cerr << "web server start failed: " << error.what() << '\n';
+      return 5;
+    }
+  }
+
   bool timed_scene_switched = false;
   const std::uint64_t scene_switch_recorded_frame =
       options.record_path.empty()
@@ -607,8 +660,10 @@ int main(int argc, char** argv) {
                                        options.record_fps);
 
   while (images.connected()) {
+    processWebCommands();
     auto frame = images.waitForLatest(previous_sequence,
-                                      std::chrono::milliseconds(1500));
+                                      std::chrono::milliseconds(
+                                          web_server ? 100 : 1500));
     if (!frame) {
       if (frame.status.error != daedalus_sdk::ClientError::Timeout) {
         std::cerr << "SDK receive failed: " << frame.status.message << '\n';

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace cv {
 class Mat;
@@ -20,8 +22,9 @@ struct WebServerOptions {
 class MjpegServer {
  public:
   struct State;
+  using ControlHandler = std::function<bool(std::string_view)>;
 
-  explicit MjpegServer(WebServerOptions options);
+  MjpegServer(WebServerOptions options, ControlHandler control_handler = {});
   ~MjpegServer();
 
   MjpegServer(const MjpegServer&) = delete;
