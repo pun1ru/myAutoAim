@@ -23,6 +23,7 @@ armor_pose_dataset/
 cvat_import/
 *.pt
 *.onnx
+!yoloDetect/models/armor_pose_0815_640.onnx
 *.engine
 *.bmp
 *.jpg

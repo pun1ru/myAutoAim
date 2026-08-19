@@ -1,9 +1,15 @@
+#include "control/gimbal_aim_solver.hpp"
+#include "control/static_target_controller.hpp"
+#include "coordinates/simulator_pose_adapter.hpp"
 #include "detection/yolo_pose_detector.hpp"
+#include "pose/armor_pose_estimator.hpp"
 #include "web/mjpeg_server.hpp"
 
 #include <daedalus_sim_sdk/scene_control_client.hpp>
 #include <daedalus_sim_sdk/tcp_image_client.hpp>
+#include <daedalus_sim_sdk/udp_gimbal_client.hpp>
 
+#include <opencv2/calib3d.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
@@ -11,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
@@ -19,10 +26,12 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace daedalus_sdk = daedalus::sim::sdk::v1;
@@ -39,15 +48,18 @@ struct Options {
   std::string host = "127.0.0.1";
   std::uint16_t port = daedalus_sdk::kTcpImagePort;
   std::uint16_t control_port = daedalus_sdk::kUdpSceneControlPort;
+  std::uint16_t gimbal_port = daedalus_sdk::kUdpCommandPort;
   std::filesystem::path model;
-  float confidence = 0.65F;
+  float confidence = 0.01F;
   float keypoint_confidence = 0.25F;
+  yolo_detect::ArmorSize armor_size = yolo_detect::ArmorSize::Small;
   float nms = 0.45F;
   int input_size = 640;
   int display_width = 1100;
   std::uint16_t web_port = 0;
   std::string web_bind = "127.0.0.1";
   int web_jpeg_quality = 80;
+  std::filesystem::path ipc_directory;
   std::uint8_t target = 3;
   float vehicle_speed = 1.5F;
   float speed_step = 0.25F;
@@ -80,29 +92,48 @@ struct SceneState {
   float spin_speed_deg_s = 60.0F;
 };
 
+struct DetectionAim {
+  bool coordinate_valid = false;
+  cv::Vec3d center_odom_m{0.0, 0.0, 0.0};
+  yolo_detect::control::GimbalAimResult aim;
+};
+
 std::filesystem::path defaultModelPath(const char* executable) {
   std::error_code error;
   std::filesystem::path path = std::filesystem::absolute(executable, error);
   if (error) path = executable;
-  return path.parent_path() / "robot_armor_0526.onnx";
+  return path.parent_path() / "armor_pose_0815_640.onnx";
+}
+
+yolo_detect::CameraCalibration simulatorCameraCalibration() {
+  yolo_detect::CameraCalibration calibration;
+  calibration.camera_matrix = cv::Matx33d(
+      1303.67532368147, 0.0, 720.0, 0.0, 1303.67532368147, 540.0, 0.0,
+      0.0, 1.0);
+  calibration.distortion_coefficients = {0.0, 0.0, 0.0, 0.0, 0.0};
+  calibration.image_size = {1440, 1080};
+  return calibration;
 }
 
 void printUsage() {
   std::cout
       << "Daedalus YOLO armor pose detector\n\n"
       << "Usage: yolo_detect [options]\n"
-      << "  --model <path>       ONNX model (default: RobotDetectionModel 0526)\n"
+      << "  --model <path>       ONNX model (default: armor_pose_0815_640)\n"
       << "  --host <address>     SDK image host (default: 127.0.0.1)\n"
       << "  --port <port>        SDK image port (default: 5602)\n"
       << "  --control-port <port> Scene control UDP port (default: 5603)\n"
-      << "  --conf <0..1>        Object confidence (default: 0.65 for 0526)\n"
-      << "  --kpt-conf <0..1>    Point display confidence (default: 0.25)\n"
+      << "  --gimbal-port <port> Gimbal/fire UDP port (default: 5601)\n"
+      << "  --conf <0..1>        Object confidence (default: 0.01 for 0815)\n"
+      << "  --kpt-conf <0..1>    Point/PnP confidence (default: 0.25)\n"
+      << "  --armor-size <name>  PnP plate model: small or large (default: small)\n"
       << "  --nms <0..1>         NMS IoU threshold (default: 0.45)\n"
       << "  --imgsz <pixels>     Square model input size (default: 640)\n"
       << "  --width <pixels>     Display width (default: 1100)\n"
       << "  --web <port>         Serve annotated MJPEG frames over HTTP\n"
       << "  --web-bind <address> Web bind address (default: 127.0.0.1)\n"
       << "  --web-quality <1..100> JPEG quality for --web (default: 80)\n"
+      << "  --ipc-dir <path>     Talos IPC directory for synchronized poses\n"
       << "  --target <0..255>    Shooting-range vehicle ID (default: 3)\n"
       << "  --speed <m/s>        Initial vehicle speed (default: 1.5)\n"
       << "  --speed-step <m/s>   +/- adjustment step (default: 0.25)\n"
@@ -168,12 +199,27 @@ Options parseOptions(int argc, char** argv) {
         throw std::runtime_error("control-port must be in [1, 65535]");
       }
       options.control_port = static_cast<std::uint16_t>(value);
+    } else if (argument == "--gimbal-port") {
+      const int value = std::stoi(requireValue(index, argc, argv));
+      if (value < 1 || value > 65535) {
+        throw std::runtime_error("gimbal-port must be in [1, 65535]");
+      }
+      options.gimbal_port = static_cast<std::uint16_t>(value);
     } else if (argument == "--conf") {
       options.confidence =
           parseUnitFloat(requireValue(index, argc, argv), "conf");
     } else if (argument == "--kpt-conf") {
       options.keypoint_confidence =
           parseUnitFloat(requireValue(index, argc, argv), "kpt-conf");
+    } else if (argument == "--armor-size") {
+      const std::string value = requireValue(index, argc, argv);
+      if (value == "small") {
+        options.armor_size = yolo_detect::ArmorSize::Small;
+      } else if (value == "large") {
+        options.armor_size = yolo_detect::ArmorSize::Large;
+      } else {
+        throw std::runtime_error("armor-size must be small or large");
+      }
     } else if (argument == "--nms") {
       options.nms = parseUnitFloat(requireValue(index, argc, argv), "nms");
     } else if (argument == "--imgsz") {
@@ -201,6 +247,11 @@ Options parseOptions(int argc, char** argv) {
       options.web_jpeg_quality = std::stoi(requireValue(index, argc, argv));
       if (options.web_jpeg_quality < 1 || options.web_jpeg_quality > 100) {
         throw std::runtime_error("web-quality must be in [1, 100]");
+      }
+    } else if (argument == "--ipc-dir") {
+      options.ipc_directory = requireValue(index, argc, argv);
+      if (options.ipc_directory.empty()) {
+        throw std::runtime_error("ipc-dir must not be empty");
       }
     } else if (argument == "--target") {
       const int value = std::stoi(requireValue(index, argc, argv));
@@ -369,6 +420,9 @@ void drawText(cv::Mat& image, const std::string& text, int line,
 
 void drawDetection(cv::Mat& image,
                    const yolo_detect::ArmorDetection& detection,
+                   const yolo_detect::PoseResult& pose,
+                   const DetectionAim& detection_aim,
+                   const yolo_detect::CameraCalibration& calibration,
                    float keypoint_threshold) {
   const cv::Rect box(cvRound(detection.box.x), cvRound(detection.box.y),
                      cvRound(detection.box.width),
@@ -424,6 +478,129 @@ void drawDetection(cv::Mat& image,
               cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
   cv::putText(image, label, label_origin, cv::FONT_HERSHEY_SIMPLEX, 0.55,
               cv::Scalar(255, 180, 30), 1, cv::LINE_AA);
+
+  if (pose.valid) {
+    cv::drawFrameAxes(image, calibration.camera_matrix,
+                      calibration.distortion_coefficients, pose.rvec_rad,
+                      pose.tvec_m, 0.06F, 2);
+    const std::string pose_label =
+        "C[m] x=" + fixed(pose.center_camera_m[0], 3) +
+        " y=" + fixed(pose.center_camera_m[1], 3) +
+        " z=" + fixed(pose.center_camera_m[2], 3) +
+        " rms=" + fixed(pose.reprojection_rms_px, 2) +
+        " n=" + std::to_string(pose.candidate_count);
+    const int pose_y =
+        std::min(image.rows - 8, std::max(20, box.y + box.height + 20));
+    const cv::Point pose_origin(std::max(0, box.x), pose_y);
+    cv::putText(image, pose_label, pose_origin, cv::FONT_HERSHEY_SIMPLEX,
+                0.48, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+    cv::putText(image, pose_label, pose_origin, cv::FONT_HERSHEY_SIMPLEX,
+                0.48, cv::Scalar(90, 255, 150), 1, cv::LINE_AA);
+    if (detection_aim.coordinate_valid) {
+      std::string aim_label =
+          "O[m] x=" + fixed(detection_aim.center_odom_m[0], 3) +
+          " y=" + fixed(detection_aim.center_odom_m[1], 3) +
+          " z=" + fixed(detection_aim.center_odom_m[2], 3);
+      if (detection_aim.aim.valid) {
+        aim_label +=
+            " aim yaw=" + fixed(detection_aim.aim.yaw_command_deg, 2) +
+            " pitch=" + fixed(detection_aim.aim.pitch_command_deg, 2) +
+            " tof=" + fixed(detection_aim.aim.time_of_flight_s, 3);
+      } else {
+        aim_label += " aim=" +
+            std::string(yolo_detect::control::aimStatusName(
+                detection_aim.aim.status));
+      }
+      const cv::Point aim_origin(
+          pose_origin.x, std::min(image.rows - 8, pose_origin.y + 19));
+      cv::putText(image, aim_label, aim_origin, cv::FONT_HERSHEY_SIMPLEX,
+                  0.45, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+      cv::putText(image, aim_label, aim_origin, cv::FONT_HERSHEY_SIMPLEX,
+                  0.45, cv::Scalar(80, 220, 255), 1, cv::LINE_AA);
+    }
+  }
+}
+
+yolo_detect::WebFrameTelemetry makeWebTelemetry(
+    std::uint64_t source_sequence,
+    const std::vector<yolo_detect::PoseResult>& poses,
+    const std::vector<DetectionAim>& detection_aims,
+    const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
+    const std::string& coordinate_message,
+    const yolo_detect::control::StaticTargetController& gimbal_control) {
+  yolo_detect::WebFrameTelemetry telemetry;
+  telemetry.source_sequence = source_sequence;
+  telemetry.coordinate_valid = coordinate_snapshot.valid;
+  telemetry.coordinate_status = coordinate_message;
+  telemetry.camera_position_error_m =
+      coordinate_snapshot.camera_position_error_m;
+  telemetry.actual_yaw_deg =
+      coordinate_snapshot.gimbal_yaw_rad * 180.0 / CV_PI;
+  telemetry.actual_pitch_command_deg =
+      90.0 + coordinate_snapshot.gimbal_elevation_rad * 180.0 / CV_PI;
+  telemetry.gimbal_following = gimbal_control.following();
+  telemetry.fire_pending = gimbal_control.firePending();
+  telemetry.gimbal_status = gimbal_control.status();
+  telemetry.last_gimbal_command_id = gimbal_control.lastCommandId();
+  telemetry.last_command_fired = gimbal_control.lastCommandFired();
+  telemetry.static_target_valid =
+      gimbal_control.staticTargetOdomM().has_value();
+  if (gimbal_control.staticTargetOdomM()) {
+    telemetry.static_target_odom_x_m =
+        (*gimbal_control.staticTargetOdomM())[0];
+    telemetry.static_target_odom_y_m =
+        (*gimbal_control.staticTargetOdomM())[1];
+    telemetry.static_target_odom_z_m =
+        (*gimbal_control.staticTargetOdomM())[2];
+  }
+  telemetry.poses.reserve(poses.size());
+  for (std::size_t index = 0; index < poses.size(); ++index) {
+    const yolo_detect::PoseResult& pose = poses[index];
+    const DetectionAim* detection_aim =
+        index < detection_aims.size() ? &detection_aims[index] : nullptr;
+    yolo_detect::WebPoseTelemetry item;
+    item.detection_index = index;
+    item.valid = pose.valid;
+    item.armor_size = yolo_detect::armorSizeName(pose.armor_size);
+    item.status = yolo_detect::poseStatusName(pose.status);
+    item.x_m = pose.center_camera_m[0];
+    item.y_m = pose.center_camera_m[1];
+    item.z_m = pose.center_camera_m[2];
+    item.reprojection_rms_px = pose.reprojection_rms_px;
+    item.candidate_count = pose.candidate_count;
+    item.coordinate_valid =
+        detection_aim != nullptr && detection_aim->coordinate_valid;
+    item.coordinate_status =
+        item.coordinate_valid
+            ? "success"
+            : (pose.valid ? coordinate_message : "PnP pose invalid");
+    if (detection_aim != nullptr) {
+      item.odom_x_m = detection_aim->center_odom_m[0];
+      item.odom_y_m = detection_aim->center_odom_m[1];
+      item.odom_z_m = detection_aim->center_odom_m[2];
+      item.aim_valid = detection_aim->aim.valid;
+      item.aim_status =
+          yolo_detect::control::aimStatusName(detection_aim->aim.status);
+      item.ballistic_status =
+          yolo_detect::ballistics::ballisticStatusName(
+              detection_aim->aim.ballistic_status);
+      item.yaw_command_deg = detection_aim->aim.yaw_command_deg;
+      item.pitch_command_deg = detection_aim->aim.pitch_command_deg;
+      item.time_of_flight_s = detection_aim->aim.time_of_flight_s;
+      item.gravity_drop_m = detection_aim->aim.gravity_drop_m;
+      item.muzzle_odom_x_m = detection_aim->aim.muzzle_center_odom_m[0];
+      item.muzzle_odom_y_m = detection_aim->aim.muzzle_center_odom_m[1];
+      item.muzzle_odom_z_m = detection_aim->aim.muzzle_center_odom_m[2];
+      item.predicted = detection_aim->aim.predicted;
+      item.prediction_horizon_s =
+          detection_aim->aim.prediction_horizon_s;
+    } else {
+      item.aim_status = "not evaluated";
+      item.ballistic_status = "not evaluated";
+    }
+    telemetry.poses.push_back(std::move(item));
+  }
+  return telemetry;
 }
 
 }  // namespace
@@ -463,6 +640,29 @@ int main(int argc, char** argv) {
     return 3;
   }
 
+  const yolo_detect::CameraCalibration camera_calibration =
+      simulatorCameraCalibration();
+  const yolo_detect::ArmorPoseEstimator pose_estimator(camera_calibration);
+  const yolo_detect::control::GimbalAimSolver aim_solver;
+  yolo_detect::coordinates::SimulatorPoseAdapter simulator_pose;
+  std::string coordinate_message =
+      "coordinate transform disabled: provide --ipc-dir";
+  if (!options.ipc_directory.empty()) {
+    if (simulator_pose.open(options.ipc_directory)) {
+      coordinate_message = "success";
+      const cv::Vec3d& camera_offset =
+          simulator_pose.cameraOffsetGimbalM();
+      const cv::Vec3d& muzzle_offset =
+          simulator_pose.muzzleOffsetGimbalM();
+      std::cout << "coordinate adapter ready: camera_G=("
+                << camera_offset << ") m muzzle_G=(" << muzzle_offset
+                << ") m\n";
+    } else {
+      coordinate_message = simulator_pose.lastError();
+      std::cerr << coordinate_message << '\n';
+    }
+  }
+
   SceneState scene_state;
   scene_state.target = options.target;
   scene_state.vehicle_speed = options.vehicle_speed;
@@ -479,6 +679,9 @@ int main(int argc, char** argv) {
   bool control_available = reportControl(
       scene->createSession(), "createSession", control_message);
   bool control_ok = control_available;
+  daedalus_sdk::UdpGimbalClient gimbal(
+      {options.host, options.gimbal_port});
+  yolo_detect::control::StaticTargetController gimbal_control;
 
   if (control_available && options.startup_scene != "unchanged") {
     daedalus_sdk::SceneMode startup_scene;
@@ -513,7 +716,11 @@ int main(int argc, char** argv) {
   std::cout << "connected: tcp://" << options.host << ':' << options.port
             << " control=udp://" << options.host << ':'
             << options.control_port << " conf=" << options.confidence
-            << " point-order=BL,TL,TR,BR\n";
+            << " gimbal=udp://" << options.host << ':'
+            << options.gimbal_port
+            << " point-order=BL,TL,TR,BR armor-size="
+            << yolo_detect::armorSizeName(options.armor_size)
+            << " pnp-frame=C pnp-unit=m\n";
 
   constexpr char kWindowName[] = "YOLO Armor Detection - Q/Esc to close";
   if (!options.no_display) {
@@ -533,6 +740,7 @@ int main(int argc, char** argv) {
   double inference_ms = 0.0;
   double total_inference_ms = 0.0;
   std::size_t latest_detection_count = 0;
+  std::size_t latest_pose_count = 0;
   cv::VideoWriter recorder;
   bool recorder_opened = false;
 
@@ -590,10 +798,10 @@ int main(int argc, char** argv) {
   std::mutex web_command_mutex;
   std::deque<std::string> web_commands;
   const auto queueWebCommand = [&](std::string_view action) {
-    constexpr std::array<std::string_view, 9> kKnownActions = {
+    constexpr std::array<std::string_view, 11> kKnownActions = {
         "scene-shooting-range", "scene-energy", "reset", "motion-stop",
         "motion-linear", "motion-spin", "motion-linear-spin", "speed-down",
-        "speed-up"};
+        "speed-up", "gimbal-follow-toggle", "gimbal-fire"};
     if (std::find(kKnownActions.begin(), kKnownActions.end(), action) ==
         kKnownActions.end()) {
       return false;
@@ -633,6 +841,10 @@ int main(int argc, char** argv) {
         adjustVehicleSpeed(-options.speed_step);
       } else if (action == "speed-up") {
         adjustVehicleSpeed(options.speed_step);
+      } else if (action == "gimbal-follow-toggle") {
+        gimbal_control.toggleFollowing();
+      } else if (action == "gimbal-fire") {
+        gimbal_control.requestFire();
       }
     }
   };
@@ -678,6 +890,15 @@ int main(int argc, char** argv) {
 
     const auto& source = *frame.value;
     const auto& header = source.header;
+    yolo_detect::coordinates::CoordinateSnapshot coordinate_snapshot;
+    coordinate_snapshot.frame_sequence = header.source_sequence;
+    if (simulator_pose.isOpen()) {
+      coordinate_snapshot =
+          simulator_pose.snapshotForFrame(header.source_sequence);
+      coordinate_message = coordinate_snapshot.valid
+                               ? "success"
+                               : simulator_pose.lastError();
+    }
     if (previous_sequence != 0 && header.source_sequence > previous_sequence + 1) {
       skipped_count += header.source_sequence - previous_sequence - 1;
     }
@@ -720,6 +941,7 @@ int main(int argc, char** argv) {
                   << " process_fps=" << fixed(receive_fps)
                   << " inference_ms=" << fixed(inference_ms)
                   << " detections=" << latest_detection_count
+                  << " poses=" << latest_pose_count
                   << " skipped=" << skipped_count << '\n';
       }
     }
@@ -754,10 +976,89 @@ int main(int argc, char** argv) {
                        : inference_ms * 0.9 + current_inference_ms * 0.1;
     latest_detection_count = detections.size();
 
+    std::vector<yolo_detect::PoseResult> poses;
+    poses.reserve(detections.size());
+    for (const yolo_detect::ArmorDetection& detection : detections) {
+      const bool keypoints_confident = std::all_of(
+          detection.keypoint_confidences.begin(),
+          detection.keypoint_confidences.end(), [&](float confidence) {
+            return std::isfinite(confidence) &&
+                   confidence >= options.keypoint_confidence;
+          });
+      if (!keypoints_confident) {
+        yolo_detect::PoseResult skipped_pose;
+        skipped_pose.status =
+            yolo_detect::PoseStatus::InsufficientKeypointConfidence;
+        skipped_pose.armor_size = options.armor_size;
+        poses.push_back(skipped_pose);
+        continue;
+      }
+      poses.push_back(pose_estimator.estimate(
+          detection.keypoints, bgr.size(), options.armor_size));
+    }
+    latest_pose_count = static_cast<std::size_t>(std::count_if(
+        poses.begin(), poses.end(),
+        [](const yolo_detect::PoseResult& pose) { return pose.valid; }));
+
+    std::vector<DetectionAim> detection_aims(poses.size());
+    if (coordinate_snapshot.valid) {
+      for (std::size_t index = 0; index < poses.size(); ++index) {
+        if (!poses[index].valid) continue;
+        DetectionAim& detection_aim = detection_aims[index];
+        detection_aim.coordinate_valid = true;
+        detection_aim.center_odom_m =
+            yolo_detect::coordinates::cameraPointToOdom(
+                coordinate_snapshot, poses[index].center_camera_m);
+        detection_aim.aim = aim_solver.solve(
+            {detection_aim.center_odom_m, false, 0.0}, coordinate_snapshot);
+      }
+    }
+    const std::size_t latest_aim_count =
+        static_cast<std::size_t>(std::count_if(
+            detection_aims.begin(), detection_aims.end(),
+            [](const DetectionAim& item) { return item.aim.valid; }));
+
+    std::optional<cv::Vec3d> capture_candidate_odom_m;
+    double best_reprojection_rms_px =
+        std::numeric_limits<double>::infinity();
+    for (std::size_t index = 0; index < poses.size(); ++index) {
+      if (!poses[index].valid ||
+          !detection_aims[index].coordinate_valid ||
+          !std::isfinite(poses[index].reprojection_rms_px)) {
+        continue;
+      }
+      if (poses[index].reprojection_rms_px < best_reprojection_rms_px) {
+        best_reprojection_rms_px = poses[index].reprojection_rms_px;
+        capture_candidate_odom_m = detection_aims[index].center_odom_m;
+      }
+    }
+
+    const yolo_detect::control::StaticTargetCommand gimbal_command =
+        gimbal_control.update(capture_candidate_odom_m,
+                              coordinate_snapshot);
+    if (gimbal_command.valid) {
+      daedalus_sdk::UdpGimbalCommand command;
+      command.yaw_deg =
+          static_cast<float>(gimbal_command.aim.yaw_command_deg);
+      command.pitch_deg =
+          static_cast<float>(gimbal_command.aim.pitch_command_deg);
+      command.distance_m = static_cast<float>(gimbal_command.distance_m);
+      command.fire_advice = gimbal_command.fire;
+      const auto sent = gimbal.sendTracked(command);
+      if (sent.ok()) {
+        gimbal_control.acknowledgeCommand(*sent.value,
+                                          gimbal_command.fire);
+      } else {
+        gimbal_control.reportSendFailure(sent.status.message);
+      }
+    }
+
     if (!options.no_display || !options.record_path.empty() || web_server) {
       cv::Mat annotated = bgr.clone();
-      for (const auto& detection : detections) {
-        drawDetection(annotated, detection, options.keypoint_confidence);
+      for (std::size_t index = 0; index < detections.size(); ++index) {
+        drawDetection(annotated, detections[index], poses[index],
+                      detection_aims[index], camera_calibration,
+                      options.keypoint_confidence);
       }
 
       drawText(annotated,
@@ -778,23 +1079,50 @@ int main(int argc, char** argv) {
                  "   points: 1 BL  2 TL  3 TR  4 BR",
              2, cv::Scalar(80, 220, 255));
       drawText(annotated,
+             "PnP C: " + std::to_string(latest_pose_count) + "/" +
+                 std::to_string(detections.size()) + " valid   plate: " +
+                 yolo_detect::armorSizeName(options.armor_size) +
+                 "   position unit: m",
+             3, latest_pose_count > 0 ? cv::Scalar(80, 255, 120)
+                                      : cv::Scalar(80, 180, 255));
+      drawText(
+          annotated,
+          coordinate_snapshot.valid
+              ? "Coordinates O: actual yaw=" +
+                    fixed(coordinate_snapshot.gimbal_yaw_rad * 180.0 / CV_PI, 2) +
+                    " pitch=" +
+                    fixed(90.0 + coordinate_snapshot.gimbal_elevation_rad *
+                                     180.0 / CV_PI, 2) +
+                    " aim=" + std::to_string(latest_aim_count) + "/" +
+                    std::to_string(latest_pose_count) + " | " +
+                    gimbal_control.status()
+              : "Coordinates O: " + coordinate_message,
+          4, coordinate_snapshot.valid ? cv::Scalar(80, 255, 120)
+                                       : cv::Scalar(80, 180, 255));
+      drawText(annotated,
              "scene: " + scene_state.scene +
                  "   control: " +
                  (control_available ? "ready" : "unavailable") +
                  "   target: " + std::to_string(scene_state.target),
-             3, control_available ? cv::Scalar(80, 255, 120)
+             5, control_available ? cv::Scalar(80, 255, 120)
                                   : cv::Scalar(80, 180, 255));
       drawText(annotated,
              "motion: " + std::string(motionName(scene_state.motion)) +
                  "   vehicle speed: " + fixed(scene_state.vehicle_speed, 2) +
                  " m/s   spin: " + fixed(scene_state.spin_speed_deg_s, 1) +
                  " deg/s",
-             4, cv::Scalar(80, 220, 255));
-      drawText(annotated, control_message, 5,
+             6, cv::Scalar(80, 220, 255));
+      drawText(annotated, control_message, 7,
              control_ok ? cv::Scalar(80, 255, 120)
                         : cv::Scalar(80, 180, 255));
 
-      if (web_server) web_server->publish(annotated);
+      if (web_server) {
+        web_server->publish(
+            annotated,
+            makeWebTelemetry(header.source_sequence, poses, detection_aims,
+                             coordinate_snapshot, coordinate_message,
+                             gimbal_control));
+      }
 
       if (!options.record_path.empty()) {
         if (!recorder_opened) {

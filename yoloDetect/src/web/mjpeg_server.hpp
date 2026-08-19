@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cv {
 class Mat;
@@ -16,6 +18,54 @@ struct WebServerOptions {
   std::string bind_address = "127.0.0.1";
   std::uint16_t port = 8080;
   int jpeg_quality = 80;
+};
+
+struct WebPoseTelemetry {
+  std::size_t detection_index = 0;
+  bool valid = false;
+  std::string armor_size;
+  std::string status;
+  double x_m = 0.0;
+  double y_m = 0.0;
+  double z_m = 0.0;
+  double reprojection_rms_px = 0.0;
+  std::size_t candidate_count = 0;
+  bool coordinate_valid = false;
+  std::string coordinate_status;
+  double odom_x_m = 0.0;
+  double odom_y_m = 0.0;
+  double odom_z_m = 0.0;
+  bool aim_valid = false;
+  std::string aim_status;
+  std::string ballistic_status;
+  double yaw_command_deg = 0.0;
+  double pitch_command_deg = 0.0;
+  double time_of_flight_s = 0.0;
+  double gravity_drop_m = 0.0;
+  double muzzle_odom_x_m = 0.0;
+  double muzzle_odom_y_m = 0.0;
+  double muzzle_odom_z_m = 0.0;
+  bool predicted = false;
+  double prediction_horizon_s = 0.0;
+};
+
+struct WebFrameTelemetry {
+  std::uint64_t source_sequence = 0;
+  bool coordinate_valid = false;
+  std::string coordinate_status;
+  double camera_position_error_m = 0.0;
+  double actual_yaw_deg = 0.0;
+  double actual_pitch_command_deg = 90.0;
+  bool gimbal_following = false;
+  bool fire_pending = false;
+  bool static_target_valid = false;
+  std::string gimbal_status;
+  double static_target_odom_x_m = 0.0;
+  double static_target_odom_y_m = 0.0;
+  double static_target_odom_z_m = 0.0;
+  std::uint64_t last_gimbal_command_id = 0;
+  bool last_command_fired = false;
+  std::vector<WebPoseTelemetry> poses;
 };
 
 // A small, dependency-free HTTP server for local MJPEG debugging.
@@ -33,7 +83,9 @@ class MjpegServer {
   MjpegServer& operator=(MjpegServer&&) = delete;
 
   void publish(const cv::Mat& bgr_frame);
- [[nodiscard]] std::string url() const;
+  void publish(const cv::Mat& bgr_frame,
+               const WebFrameTelemetry& telemetry);
+  [[nodiscard]] std::string url() const;
 
  private:
   std::shared_ptr<State> state_;
