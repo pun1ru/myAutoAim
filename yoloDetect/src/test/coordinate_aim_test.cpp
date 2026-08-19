@@ -13,10 +13,12 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+// 在条件不成立时抛出带上下文的测试失败信息。
 void require(bool condition, const std::string& message) {
   if (!condition) throw std::runtime_error(message);
 }
 
+// 验证有限浮点值在给定误差内相等。
 void requireNear(double actual, double expected, double tolerance,
                  const std::string& message) {
   if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance) {
@@ -25,6 +27,7 @@ void requireNear(double actual, double expected, double tolerance,
   }
 }
 
+// 构造零位姿、单位旋转的有效坐标观测。
 yolo_detect::coordinates::CoordinateObservation identityObservation() {
   yolo_detect::coordinates::CoordinateObservation observation;
   observation.frame_sequence = 42;
@@ -35,6 +38,7 @@ yolo_detect::coordinates::CoordinateObservation identityObservation() {
   return observation;
 }
 
+// 验证固定的 OpenCV 相机轴到云台轴映射。
 void testCameraAxisMapping() {
   namespace coordinates = yolo_detect::coordinates;
   auto observation = identityObservation();
@@ -51,6 +55,7 @@ void testCameraAxisMapping() {
   requireNear(transformed[1], 1.0, 1e-12, "camera +x must map to G -y");
   requireNear(transformed[2], 1.1, 1e-12, "camera +y must map to G -z");
 }
+// 验证模拟器相机/炮口偏移和坐标重建回归结果。
 void testSimulatorCalibrationRegression() {
   namespace coordinates = yolo_detect::coordinates;
   auto observation = identityObservation();
@@ -83,6 +88,7 @@ void testSimulatorCalibrationRegression() {
 }
 
 
+// 验证不一致的相机偏移会使快照失效。
 void testCameraOffsetMismatchRejected() {
   namespace coordinates = yolo_detect::coordinates;
   auto observation = identityObservation();
@@ -95,6 +101,7 @@ void testCameraOffsetMismatchRejected() {
           "camera position mismatch returned wrong status");
 }
 
+// 用返回的瞄准结果正向验证弹丸能够命中目标。
 void verifyProjectileHit(
     const yolo_detect::control::GimbalAimResult& aim,
     const yolo_detect::coordinates::CoordinateSnapshot& snapshot,
@@ -116,6 +123,7 @@ void verifyProjectileHit(
           "computed command does not intersect target");
 }
 
+// 验证水平底盘下的瞄准指令和弹道解。
 void testLevelChassisAimAndBallistics() {
   namespace control = yolo_detect::control;
   namespace coordinates = yolo_detect::coordinates;
@@ -137,6 +145,7 @@ void testLevelChassisAimAndBallistics() {
   verifyProjectileHit(aim, snapshot, target);
 }
 
+// 验证底盘偏航被正确从云台绝对指令中消除。
 void testChassisYawIsRemovedFromCommand() {
   namespace control = yolo_detect::control;
   namespace coordinates = yolo_detect::coordinates;
@@ -158,6 +167,7 @@ void testChassisYawIsRemovedFromCommand() {
           "prediction metadata must pass through unchanged");
 }
 
+// 验证不可达目标不会产生有效云台指令。
 void testUnreachableTargetRejected() {
   namespace control = yolo_detect::control;
   namespace coordinates = yolo_detect::coordinates;
@@ -173,6 +183,7 @@ void testUnreachableTargetRejected() {
           "unreachable target returned wrong ballistic status");
 }
 
+// 验证静态目标锁定、对准后单次开火和停止跟随行为。
 void testStaticTargetFollowAndSingleFire() {
   namespace control = yolo_detect::control;
   namespace coordinates = yolo_detect::coordinates;
@@ -248,6 +259,7 @@ void testStaticTargetFollowAndSingleFire() {
           "stopping follow must clear the static target");
 }
 
+// 验证未在期限内对准的开火请求会超时取消。
 void testStaticTargetFireTimeout() {
   namespace control = yolo_detect::control;
   namespace coordinates = yolo_detect::coordinates;
@@ -270,6 +282,7 @@ void testStaticTargetFireTimeout() {
 
 }  // namespace
 
+// 运行全部坐标与云台瞄准单元测试。
 int main() {
   try {
     testCameraAxisMapping();

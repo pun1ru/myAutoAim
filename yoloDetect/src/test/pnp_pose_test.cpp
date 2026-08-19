@@ -14,12 +14,14 @@ namespace {
 
 int failures = 0;
 
+// 在条件失败时记录测试断言。
 void expect(bool condition, const char* message) {
   if (condition) return;
   std::cerr << "FAIL: " << message << '\n';
   ++failures;
 }
 
+// 返回与模拟器一致的固定测试相机标定。
 yolo_detect::CameraCalibration testCalibration() {
   yolo_detect::CameraCalibration calibration;
   calibration.camera_matrix = cv::Matx33d(
@@ -30,6 +32,7 @@ yolo_detect::CameraCalibration testCalibration() {
   return calibration;
 }
 
+// 使用已知位姿投影出一组无噪声装甲板图像点。
 std::array<cv::Point2f, yolo_detect::kArmorPointCount> syntheticImagePoints(
     const yolo_detect::CameraCalibration& calibration, cv::Vec3d& rvec,
     cv::Vec3d& tvec) {
@@ -60,6 +63,7 @@ std::array<cv::Point2f, yolo_detect::kArmorPointCount> syntheticImagePoints(
           cv::Point2f(projected[2]), cv::Point2f(projected[3])};
 }
 
+// 验证大小装甲板模型尺寸及其关键点顺序。
 void testObjectPointDefinitions() {
   const auto small = yolo_detect::ArmorPoseEstimator::objectPoints(
       yolo_detect::ArmorSize::Small);
@@ -77,6 +81,7 @@ void testObjectPointDefinitions() {
          "object point order must end with TR, BR");
 }
 
+// 验证 IPPE 能恢复合成小装甲板的位姿。
 void testSyntheticSmallArmorPose() {
   const auto calibration = testCalibration();
   const yolo_detect::ArmorPoseEstimator estimator(calibration);
@@ -126,6 +131,7 @@ void testSyntheticSmallArmorPose() {
          "rotated armor normal must remain a unit vector");
 }
 
+// 验证分辨率、非有限点和错误点顺序的处理。
 void testInputValidationAndOrdering() {
   const auto calibration = testCalibration();
   const yolo_detect::ArmorPoseEstimator estimator(calibration);
@@ -158,6 +164,7 @@ void testInputValidationAndOrdering() {
   }
 }
 
+// 验证无效相机内参在构造估计器时被拒绝。
 void testInvalidCalibration() {
   auto calibration = testCalibration();
   calibration.camera_matrix(0, 0) = 0.0;
@@ -173,6 +180,7 @@ void testInvalidCalibration() {
 
 }  // namespace
 
+// 运行全部 PnP 单元测试并返回断言结果。
 int main() {
   testObjectPointDefinitions();
   testSyntheticSmallArmorPose();

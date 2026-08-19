@@ -35,29 +35,34 @@ namespace {
 using Socket = SOCKET;
 constexpr Socket kInvalidSocket = INVALID_SOCKET;
 
+// 在 Winsock 句柄有效时关闭它。
 void closeSocket(Socket socket) {
   if (socket != kInvalidSocket) closesocket(socket);
 }
 
 class WinsockSession {
  public:
+  // 为 HTTP 服务器生命周期初始化 Winsock。
   WinsockSession() {
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
       throw std::runtime_error("WSAStartup failed");
     }
   }
+  // 释放进程级 Winsock 初始化引用。
   ~WinsockSession() { WSACleanup(); }
 };
 #else
 using Socket = int;
 constexpr Socket kInvalidSocket = -1;
 
+// 在 POSIX 套接字有效时关闭它。
 void closeSocket(Socket socket) {
   if (socket != kInvalidSocket) close(socket);
 }
 #endif
 
+// 发送完整字节缓冲区，直到对端接收所有字节。
 bool sendAll(Socket socket, const void* data, std::size_t size) {
   const auto* bytes = static_cast<const char*>(data);
   while (size > 0) {
@@ -73,10 +78,12 @@ bool sendAll(Socket socket, const void* data, std::size_t size) {
   return true;
 }
 
+// 通过完整缓冲区发送助手发送 HTTP 头或文本正文。
 bool sendText(Socket socket, const std::string& response) {
   return sendAll(socket, response.data(), response.size());
 }
 
+// 构建根路径返回的独立浏览器界面。
 std::string htmlPage() {
   return R"(<!doctype html>
 <html lang="en">
@@ -182,6 +189,7 @@ const cell = (text) => {
   return element;
 };
 const metric = (value, digits) => typeof value === 'number' ? value.toFixed(digits) : '-';
+// 独立于 MJPEG 图像流刷新遥测数据。
 async function refreshPose() {
   try {
     const response = await fetch('/api/status', { cache: 'no-store' });
@@ -277,6 +285,7 @@ struct MjpegServer::State {
 
 namespace {
 
+// 转义可能使 JSON 字符串失效的字符。
 std::string jsonEscape(const std::string& value) {
   std::string escaped;
   escaped.reserve(value.size());
@@ -287,6 +296,7 @@ std::string jsonEscape(const std::string& value) {
   return escaped;
 }
 
+// 将最新图像、位姿和云台遥测序列化为状态 API 数据。
 std::string telemetryJson(const WebFrameTelemetry& telemetry) {
   std::ostringstream stream;
   const bool coordinate_metrics_valid =
@@ -411,11 +421,13 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
   return stream.str();
 }
 
+// 对不支持的 HTTP 路由返回精简的 404 响应。
 void sendNotFound(Socket client) {
   sendText(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
                    "Connection: close\r\n\r\n");
 }
 
+// 发送禁用缓存且内容长度正确的 JSON 文档。
 void sendJsonDocument(Socket client, const std::string& body) {
   sendText(client, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                    "Cache-Control: no-store\r\nContent-Length: " +
@@ -423,6 +435,7 @@ void sendJsonDocument(Socket client, const std::string& body) {
                        "\r\nConnection: close\r\n\r\n" + body);
 }
 
+// 以精简 JSON 响应返回控制端点结果。
 void sendControlJson(Socket client, int status, const char* message) {
   const std::string body = std::string("{\"message\":\"") + message + "\"}";
   const std::string reason = status == 202 ? "Accepted" : "Bad Request";
@@ -432,6 +445,7 @@ void sendControlJson(Socket client, int status, const char* message) {
                    "\r\nConnection: close\r\n\r\n" + body);
 }
 
+// 从控制请求行提取并校验操作令牌。
 std::string controlAction(const std::string& request) {
   const std::size_t path_end = request.find(' ', 4);
   if (path_end == std::string::npos) return {};
@@ -448,6 +462,7 @@ std::string controlAction(const std::string& request) {
   return action;
 }
 
+// 在每帧 JPEG 编码完成后持续向单个客户端推送。
 void streamFrames(Socket client, const std::shared_ptr<MjpegServer::State>& state) {
   constexpr char kBoundary[] = "yolo-frame";
   if (!sendText(client, "HTTP/1.1 200 OK\r\n"
@@ -484,6 +499,7 @@ void streamFrames(Socket client, const std::shared_ptr<MjpegServer::State>& stat
   }
 }
 
+// 解析单个 HTTP 请求，并路由到页面、图像、状态或控制逻辑。
 void handleClient(Socket client, const std::shared_ptr<MjpegServer::State>& state) {
   std::array<char, 4096> request{};
   const int received = recv(client, request.data(),
@@ -544,6 +560,7 @@ void handleClient(Socket client, const std::shared_ptr<MjpegServer::State>& stat
   closeSocket(client);
 }
 
+// 接受连接，并将每个独立请求交给工作线程。
 void acceptClients(const std::shared_ptr<MjpegServer::State>& state) {
   while (state->running.load()) {
     sockaddr_storage peer{};
@@ -565,6 +582,7 @@ void acceptClients(const std::shared_ptr<MjpegServer::State>& state) {
 
 }  // namespace
 
+// 校验选项、绑定 HTTP 监听器并启动接收循环。
 MjpegServer::MjpegServer(WebServerOptions options, ControlHandler control_handler)
     : state_(std::make_shared<State>()) {
   if (options.port == 0) throw std::invalid_argument("web port must be non-zero");
@@ -614,6 +632,7 @@ MjpegServer::MjpegServer(WebServerOptions options, ControlHandler control_handle
   state_->accept_thread = std::thread(acceptClients, state_);
 }
 
+// 停止监听器并等待接收循环结束后释放共享状态。
 MjpegServer::~MjpegServer() {
   state_->running.store(false);
   state_->frame_ready.notify_all();
@@ -627,10 +646,12 @@ MjpegServer::~MjpegServer() {
   if (state_->accept_thread.joinable()) state_->accept_thread.join();
 }
 
+// 使用默认空遥测记录发布图像帧。
 void MjpegServer::publish(const cv::Mat& bgr_frame) {
   publish(bgr_frame, WebFrameTelemetry{});
 }
 
+// 对图像帧进行 JPEG 编码，原子替换共享数据并唤醒客户端。
 void MjpegServer::publish(const cv::Mat& bgr_frame,
                           const WebFrameTelemetry& telemetry) {
   if (bgr_frame.empty()) return;
@@ -648,6 +669,7 @@ void MjpegServer::publish(const cv::Mat& bgr_frame,
   state_->frame_ready.notify_all();
 }
 
+// 格式化此服务器对外可用的根地址。
 std::string MjpegServer::url() const {
   return "http://" + state_->options.bind_address + ":" +
          std::to_string(state_->options.port) + "/";

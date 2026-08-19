@@ -5,12 +5,15 @@
 namespace yolo_detect::coordinates {
 namespace {
 
+// Checks scalar coordinate input for a finite value.
 bool finite(double value) noexcept { return std::isfinite(value); }
 
+// Checks all components of a three-dimensional coordinate.
 bool finite(const cv::Vec3d& value) noexcept {
   return finite(value[0]) && finite(value[1]) && finite(value[2]);
 }
 
+// Checks all components of a WXYZ quaternion.
 bool finite(const cv::Vec4d& value) noexcept {
   return finite(value[0]) && finite(value[1]) && finite(value[2]) &&
          finite(value[3]);
@@ -18,6 +21,7 @@ bool finite(const cv::Vec4d& value) noexcept {
 
 }  // namespace
 
+// Returns a diagnostic message for coordinate snapshot validation.
 const char* coordinateStatusName(CoordinateStatus status) noexcept {
   switch (status) {
     case CoordinateStatus::Success:
@@ -36,24 +40,28 @@ const char* coordinateStatusName(CoordinateStatus status) noexcept {
   return "unknown coordinate status";
 }
 
+// Constructs a right-handed rotation about the x axis.
 cv::Matx33d rotationX(double angle_rad) noexcept {
   const double c = std::cos(angle_rad);
   const double s = std::sin(angle_rad);
   return {1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c};
 }
 
+// Constructs a right-handed rotation about the y axis.
 cv::Matx33d rotationY(double angle_rad) noexcept {
   const double c = std::cos(angle_rad);
   const double s = std::sin(angle_rad);
   return {c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c};
 }
 
+// Constructs a right-handed rotation about the z axis.
 cv::Matx33d rotationZ(double angle_rad) noexcept {
   const double c = std::cos(angle_rad);
   const double s = std::sin(angle_rad);
   return {c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0};
 }
 
+// Normalizes a WXYZ quaternion and returns its corresponding rotation matrix.
 cv::Matx33d quaternionWxyzToRotation(
     const cv::Vec4d& quaternion_wxyz, bool* valid) noexcept {
   if (valid != nullptr) *valid = false;
@@ -83,6 +91,7 @@ cv::Matx33d quaternionWxyzToRotation(
   };
 }
 
+// Returns the fixed axis permutation from OpenCV camera to gimbal frame.
 const cv::Matx33d& rotationGimbalFromCamera() noexcept {
   static const cv::Matx33d kR_GC(
       0.0, 0.0, 1.0,
@@ -91,11 +100,13 @@ const cv::Matx33d& rotationGimbalFromCamera() noexcept {
   return kR_GC;
 }
 
+// Composes simulator yaw and elevation into the B-from-G rotation.
 cv::Matx33d rotationGimbalFromNeutral(
     double yaw_rad, double elevation_rad) noexcept {
   return rotationZ(yaw_rad) * rotationY(-elevation_rad);
 }
 
+// Validates exposure metadata and reconstructs all O/B/G/C transforms.
 CoordinateSnapshot makeCoordinateSnapshot(
     const CoordinateObservation& observation,
     double camera_position_tolerance_m) noexcept {
@@ -160,6 +171,7 @@ CoordinateSnapshot makeCoordinateSnapshot(
   return snapshot;
 }
 
+// Reconstructs the O-from-C rotation from the current chassis and gimbal state.
 cv::Matx33d cameraRotationOdom(
     const CoordinateSnapshot& snapshot) noexcept {
   return snapshot.R_OB *
@@ -168,6 +180,7 @@ cv::Matx33d cameraRotationOdom(
          rotationGimbalFromCamera();
 }
 
+// Transforms a metric OpenCV-camera point to its ROS odom position.
 cv::Vec3d cameraPointToOdom(
     const CoordinateSnapshot& snapshot,
     const cv::Vec3d& point_camera_m) noexcept {
@@ -175,6 +188,7 @@ cv::Vec3d cameraPointToOdom(
          cameraRotationOdom(snapshot) * point_camera_m;
 }
 
+// Recomputes muzzle position for a candidate yaw/elevation command.
 cv::Vec3d muzzlePositionOdom(
     const CoordinateSnapshot& snapshot, double yaw_rad,
     double elevation_rad) noexcept {

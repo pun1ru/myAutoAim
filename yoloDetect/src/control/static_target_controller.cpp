@@ -9,16 +9,20 @@
 namespace yolo_detect::control {
 namespace {
 
+// Checks one controller input component for finiteness.
 bool finite(double value) noexcept { return std::isfinite(value); }
 
+// Checks a candidate world target before latching it.
 bool finite(const cv::Vec3d& value) noexcept {
   return finite(value[0]) && finite(value[1]) && finite(value[2]);
 }
 
+// Returns the smallest absolute yaw difference across the +/-180 degree seam.
 double wrappedErrorDegrees(double target, double actual) noexcept {
   return std::abs(std::remainder(target - actual, 360.0));
 }
 
+// Rejects impossible alignment tolerances and fire timeouts.
 void validateOptions(const StaticTargetControllerOptions& options) {
   if (!finite(options.alignment_tolerance_deg) ||
       options.alignment_tolerance_deg <= 0.0 ||
@@ -31,6 +35,7 @@ void validateOptions(const StaticTargetControllerOptions& options) {
   }
 }
 
+// Formats the current residual errors for operator-facing telemetry.
 std::string alignmentStatus(double yaw_error, double pitch_error) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(2)
@@ -41,12 +46,14 @@ std::string alignmentStatus(double yaw_error, double pitch_error) {
 
 }  // namespace
 
+// Stores the aim solver and validates the state-machine constraints.
 StaticTargetController::StaticTargetController(
     GimbalAimSolver aim_solver, StaticTargetControllerOptions options)
     : aim_solver_(std::move(aim_solver)), options_(options) {
   validateOptions(options_);
 }
 
+// Enters target-capture mode or clears the active follow and fire state.
 void StaticTargetController::toggleFollowing() {
   if (following_ || capture_pending_) {
     following_ = false;
@@ -65,6 +72,7 @@ void StaticTargetController::toggleFollowing() {
   status_ = "waiting for a valid static target";
 }
 
+// Arms a single shot and begins its alignment timeout window.
 void StaticTargetController::requestFire(TimePoint now) {
   fire_pending_ = true;
   last_command_fired_ = false;
@@ -73,6 +81,7 @@ void StaticTargetController::requestFire(TimePoint now) {
   status_ = "fire armed: waiting for alignment";
 }
 
+// Latches a candidate if needed and produces the current gimbal command.
 StaticTargetCommand StaticTargetController::update(
     const std::optional<cv::Vec3d>& capture_candidate_odom_m,
     const coordinates::CoordinateSnapshot& snapshot, TimePoint now) {
@@ -135,6 +144,7 @@ StaticTargetCommand StaticTargetController::update(
   return command;
 }
 
+// Records transport success and consumes a pending fire request when fired.
 void StaticTargetController::acknowledgeCommand(
     std::uint64_t command_id, bool fired) {
   last_command_id_ = command_id;
@@ -147,34 +157,42 @@ void StaticTargetController::acknowledgeCommand(
   }
 }
 
+// Preserves controller state while surfacing an outgoing command failure.
 void StaticTargetController::reportSendFailure(const std::string& message) {
   last_command_fired_ = false;
   status_ = "gimbal UDP send failed: " + message;
 }
 
+// Reports whether static follow mode is active.
 bool StaticTargetController::following() const noexcept { return following_; }
 
+// Reports whether a new valid target still needs to be latched.
 bool StaticTargetController::capturePending() const noexcept {
   return capture_pending_;
 }
 
+// Reports whether a one-shot fire request is still armed.
 bool StaticTargetController::firePending() const noexcept {
   return fire_pending_;
 }
 
+// Reports whether the latest acknowledged command carried a fire request.
 bool StaticTargetController::lastCommandFired() const noexcept {
   return last_command_fired_;
 }
 
+// Returns the identifier assigned to the latest acknowledged command.
 std::uint64_t StaticTargetController::lastCommandId() const noexcept {
   return last_command_id_;
 }
 
 const std::optional<cv::Vec3d>&
+// Returns the fixed odom target, if capture has completed.
 StaticTargetController::staticTargetOdomM() const noexcept {
   return static_target_odom_m_;
 }
 
+// Returns the latest state-machine status for UI and telemetry.
 const std::string& StaticTargetController::status() const noexcept {
   return status_;
 }

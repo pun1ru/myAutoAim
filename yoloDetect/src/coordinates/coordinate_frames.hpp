@@ -57,13 +57,16 @@ struct CoordinateSnapshot {
 
 inline constexpr double kDefaultCameraPositionToleranceM = 0.01;
 
+// Converts a coordinate-processing status to a human-readable message.
 [[nodiscard]] const char* coordinateStatusName(
     CoordinateStatus status) noexcept;
 
+// Builds right-handed rotations about the local x, y, or z axis.
 [[nodiscard]] cv::Matx33d rotationX(double angle_rad) noexcept;
 [[nodiscard]] cv::Matx33d rotationY(double angle_rad) noexcept;
 [[nodiscard]] cv::Matx33d rotationZ(double angle_rad) noexcept;
 
+// Normalizes a WXYZ quaternion and converts it to an O-from-B rotation.
 [[nodiscard]] cv::Matx33d quaternionWxyzToRotation(
     const cv::Vec4d& quaternion_wxyz, bool* valid = nullptr) noexcept;
 
@@ -71,21 +74,26 @@ inline constexpr double kDefaultCameraPositionToleranceM = 0.01;
 // (x_G, y_G, z_G) = (z_C, -x_C, -y_C).
 [[nodiscard]] const cv::Matx33d& rotationGimbalFromCamera() noexcept;
 
+// Returns the neutral-gimbal rotation for simulator yaw and elevation.
 [[nodiscard]] cv::Matx33d rotationGimbalFromNeutral(
     double yaw_rad, double elevation_rad) noexcept;
 
+// Validates one exposure-state observation and derives its frame transforms.
 [[nodiscard]] CoordinateSnapshot makeCoordinateSnapshot(
     const CoordinateObservation& observation,
     double camera_position_tolerance_m =
         kDefaultCameraPositionToleranceM) noexcept;
 
+// Returns the O-from-C rotation reconstructed from a valid snapshot.
 [[nodiscard]] cv::Matx33d cameraRotationOdom(
     const CoordinateSnapshot& snapshot) noexcept;
 
+// Transforms a camera-frame point in meters into ROS odom coordinates.
 [[nodiscard]] cv::Vec3d cameraPointToOdom(
     const CoordinateSnapshot& snapshot,
     const cv::Vec3d& point_camera_m) noexcept;
 
+// Calculates the muzzle center for an arbitrary gimbal yaw and elevation.
 [[nodiscard]] cv::Vec3d muzzlePositionOdom(
     const CoordinateSnapshot& snapshot, double yaw_rad,
     double elevation_rad) noexcept;

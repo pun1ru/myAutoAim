@@ -33,10 +33,12 @@ constexpr int kRobotColorCount = 4;
 constexpr int kRobotNumberBegin = 13;
 constexpr int kRobotNumberCount = 9;
 
+// 将还原坐标限制在原始图像边界内。
 float clamp(float value, float lower, float upper) {
   return std::max(lower, std::min(value, upper));
 }
 
+// 对模型 logits 应用数值稳定的 Sigmoid 变换。
 float sigmoid(float value) {
   if (value >= 0.0F) {
     const float e = std::exp(-value);
@@ -46,6 +48,7 @@ float sigmoid(float value) {
   return e / (1.0F + e);
 }
 
+// 计算按置信度排序的非极大值抑制所需的重叠度。
 float intersectionOverUnion(const cv::Rect2f& lhs, const cv::Rect2f& rhs) {
   const float left = std::max(lhs.x, rhs.x);
   const float top = std::max(lhs.y, rhs.y);
@@ -57,6 +60,7 @@ float intersectionOverUnion(const cv::Rect2f& lhs, const cv::Rect2f& rhs) {
   return union_area > 0.0F ? intersection / union_area : 0.0F;
 }
 
+// 在 ONNX 加载前使 CUDA 和 cuDNN 运行时库可被发现。
 void addCudaLibraryDirectory(const std::filesystem::path& directory) {
 #ifdef _WIN32
   if (directory.empty() || !std::filesystem::is_directory(directory)) {
@@ -87,6 +91,7 @@ struct YoloPoseDetector::Impl {
   bool input_float16 = false;
 };
 
+// 校验配置、加载 ONNX 模型，并选择 CPU 或 CUDA 后端。
 YoloPoseDetector::YoloPoseDetector(const std::filesystem::path& model_path,
                                    DetectorConfig config)
     : impl_(std::make_unique<Impl>()), config_(config) {
@@ -138,11 +143,15 @@ YoloPoseDetector::YoloPoseDetector(const std::filesystem::path& model_path,
   }
 }
 
+// 析构时释放不透明的 ONNX 实现对象。
 YoloPoseDetector::~YoloPoseDetector() = default;
+// 默认移动构造会转移 ONNX 会话及检测器配置的所有权。
 YoloPoseDetector::YoloPoseDetector(YoloPoseDetector&&) noexcept = default;
+// 默认移动赋值会转移 ONNX 会话及检测器配置的所有权。
 YoloPoseDetector& YoloPoseDetector::operator=(YoloPoseDetector&&) noexcept =
     default;
 
+// 生成居中的模型尺寸画布，并记录可逆变换。
 cv::Mat YoloPoseDetector::letterbox(
     const cv::Mat& source, LetterboxTransform& transform) const {
   const float width_scale =
@@ -168,6 +177,7 @@ cv::Mat YoloPoseDetector::letterbox(
   return canvas;
 }
 
+// 反向执行 Letterbox 变换，并将点裁剪到有效原图像素内。
 cv::Point2f YoloPoseDetector::restorePoint(
     float x, float y, const LetterboxTransform& transform,
     const cv::Size& source_size) const {
@@ -177,6 +187,7 @@ cv::Point2f YoloPoseDetector::restorePoint(
           clamp(y, 0.0F, static_cast<float>(source_size.height - 1))};
 }
 
+// 预处理 BGR 输入、运行 ONNX 推理、解码检测结果并执行 NMS。
 std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
   if (bgr.empty() || bgr.type() != CV_8UC3) {
     throw std::invalid_argument("detector input must be a non-empty BGR image");
@@ -275,7 +286,7 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
     ArmorDetection detection;
     detection.confidence = confidence;
     if (robot_model) {
-      // 0526 native order is TL, BL, BR, TR. Expose BL, TL, TR, BR.
+      // 0526 模型原生顺序为 TL、BL、BR、TR；对外统一为 BL、TL、TR、BR。
       constexpr std::array<int, KeypointCount> kOutputOrder = {1, 0, 3, 2};
       std::array<cv::Point2f, KeypointCount> native_points;
       for (std::size_t point_index = 0; point_index < KeypointCount;
@@ -368,6 +379,7 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
   return detections;
 }
 
+// 返回模型输入和推理后端配置。
 const DetectorConfig& YoloPoseDetector::config() const noexcept {
   return config_;
 }

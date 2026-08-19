@@ -9,24 +9,30 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+// 在坐标或弹道计算前检查标量输入。
 bool finite(double value) noexcept { return std::isfinite(value); }
 
+// 检查三维向量的每个分量。
 bool finite(const cv::Vec3d& value) noexcept {
   return finite(value[0]) && finite(value[1]) && finite(value[2]);
 }
 
+// 将弧度角转换为模拟器使用的角度。
 double radiansToDegrees(double radians) noexcept {
   return radians * 180.0 / kPi;
 }
 
+// 将角度归一化到带符号的主值弧度范围。
 double wrapRadians(double angle) noexcept {
   return std::remainder(angle, 2.0 * kPi);
 }
 
+// 将角度归一化到带符号的主值角度范围。
 double wrapDegrees(double angle) noexcept {
   return std::remainder(angle, 360.0);
 }
 
+// 拒绝无效的俯仰限制和不动点迭代设置。
 void validateOptions(const GimbalAimOptions& options) {
   if (!finite(options.minimum_pitch_command_deg) ||
       !finite(options.maximum_pitch_command_deg) ||
@@ -48,6 +54,7 @@ void validateOptions(const GimbalAimOptions& options) {
 
 }  // namespace
 
+// 返回瞄准求解结果的诊断信息。
 const char* aimStatusName(AimStatus status) noexcept {
   switch (status) {
     case AimStatus::Success:
@@ -66,6 +73,7 @@ const char* aimStatusName(AimStatus status) noexcept {
   return "unknown aim status";
 }
 
+// 保存轨迹求解器并校验指令约束。
 GimbalAimSolver::GimbalAimSolver(
     ballistics::VacuumBallisticSolver ballistic_solver,
     GimbalAimOptions options)
@@ -73,6 +81,7 @@ GimbalAimSolver::GimbalAimSolver(
   validateOptions(options_);
 }
 
+// 迭代计算炮口位置和轨迹，直到绝对指令收敛。
 GimbalAimResult GimbalAimSolver::solve(
     const AimTarget& target,
     const coordinates::CoordinateSnapshot& snapshot) const noexcept {
@@ -172,11 +181,13 @@ GimbalAimResult GimbalAimSolver::solve(
   return result;
 }
 
+// 返回此瞄准求解器持有的轨迹求解器。
 const ballistics::VacuumBallisticSolver& GimbalAimSolver::ballisticSolver()
     const noexcept {
   return ballistic_solver_;
 }
 
+// 返回已校验的瞄准约束。
 const GimbalAimOptions& GimbalAimSolver::options() const noexcept {
   return options_;
 }

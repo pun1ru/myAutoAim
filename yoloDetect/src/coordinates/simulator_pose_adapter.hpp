@@ -16,17 +16,24 @@ class SimulatorPoseAdapter {
  public:
   SimulatorPoseAdapter() = default;
 
+  // Opens the Talos metadata mapping and reads fixed camera/muzzle offsets.
   [[nodiscard]] bool open(const std::filesystem::path& ipc_directory);
+  // Closes the metadata mapping and clears cached offset validity.
   void close() noexcept;
+  // Reports whether the Talos metadata mapping is open.
   [[nodiscard]] bool isOpen() const noexcept;
 
+  // Converts the metadata matching a source frame into a coordinate snapshot.
   [[nodiscard]] CoordinateSnapshot snapshotForFrame(
       std::uint64_t frame_sequence,
       double camera_position_tolerance_m =
           kDefaultCameraPositionToleranceM) const;
 
+  // Returns the fixed camera offset expressed in gimbal coordinates.
   [[nodiscard]] const cv::Vec3d& cameraOffsetGimbalM() const noexcept;
+  // Returns the fixed muzzle offset expressed in gimbal coordinates.
   [[nodiscard]] const cv::Vec3d& muzzleOffsetGimbalM() const noexcept;
+  // Returns the most recent adapter error encountered by an operation.
   [[nodiscard]] const std::string& lastError() const noexcept;
 
  private:

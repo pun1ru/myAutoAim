@@ -10,8 +10,10 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDiscriminantTolerance = 1e-12;
 
+// 检查标量能否安全参与弹道方程计算。
 bool isFinite(double value) { return std::isfinite(value); }
 
+// 拒绝解析真空模型不支持的物理参数。
 void validateParameters(const ProjectileParameters& parameters) {
   if (!isFinite(parameters.muzzle_speed_mps) ||
       !isFinite(parameters.lifetime_s) ||
@@ -44,6 +46,7 @@ void validateParameters(const ProjectileParameters& parameters) {
 
 }  // namespace
 
+// 为遥测和诊断返回稳定的名称。
 const char* trajectoryArcName(TrajectoryArc arc) noexcept {
   switch (arc) {
     case TrajectoryArc::Low:
@@ -54,6 +57,7 @@ const char* trajectoryArcName(TrajectoryArc arc) noexcept {
   return "unknown trajectory arc";
 }
 
+// 说明弹道求解的结果。
 const char* ballisticStatusName(BallisticStatus status) noexcept {
   switch (status) {
     case BallisticStatus::Success:
@@ -72,11 +76,13 @@ const char* ballisticStatusName(BallisticStatus status) noexcept {
   return "unknown ballistic status";
 }
 
+// 保存已校验的弹丸参数，供后续求解使用。
 VacuumBallisticSolver::VacuumBallisticSolver(ProjectileParameters parameters)
     : parameters_(parameters) {
   validateParameters(parameters_);
 }
 
+// 求解低弹道或高弹道的恒重力轨迹，并校验飞行时间。
 BallisticSolution VacuumBallisticSolver::solve(
     const BallisticTarget& target, TrajectoryArc arc) const noexcept {
   BallisticSolution result;
@@ -117,7 +123,7 @@ BallisticSolution VacuumBallisticSolver::solve(
   const double root = std::sqrt(std::max(0.0, discriminant));
   double tangent = 0.0;
   if (arc == TrajectoryArc::Low) {
-    // Rationalized low-arc root avoids cancellation at short range.
+    // 有理化低弹道根式，避免近距离计算时发生消去误差。
     tangent =
         (gravity * distance * distance + 2.0 * height * speed_squared) /
         (distance * (speed_squared + root));
@@ -158,10 +164,12 @@ BallisticSolution VacuumBallisticSolver::solve(
   return result;
 }
 
+// 返回构造时选定的不可变参数。
 const ProjectileParameters& VacuumBallisticSolver::parameters() const noexcept {
   return parameters_;
 }
 
+// 将配置的弹丸冷却时间换算为射速上限。
 double VacuumBallisticSolver::maximumFireRateHz() const noexcept {
   return 1.0 / parameters_.cooldown_s;
 }

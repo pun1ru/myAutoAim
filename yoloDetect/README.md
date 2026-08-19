@@ -1,43 +1,37 @@
-# YOLO Armor Detector
+# YOLO 装甲板检测器
 
-Receives RGB/RGBA frames through DaedalusSimSdk, runs the exported YOLO11 Pose
-model with ONNX Runtime CUDA on the NVIDIA GPU, and displays armor boxes and
-four keypoints in real time. OpenCV is used for image preprocessing and the
-visualization window.
+本程序通过 DaedalusSimSdk 接收 RGB/RGBA 图像帧，使用 NVIDIA GPU 上的 ONNX Runtime CUDA
+运行导出的 YOLO11 Pose 模型，并实时显示装甲板检测框和四个关键点。OpenCV 用于图像预处理和
+可视化窗口。
 
-The keypoint order is preserved exactly as trained:
+关键点顺序与训练时完全一致：
 
-1. bottom-left
-2. top-left
-3. top-right
-4. bottom-right
+1. 左下（bottom-left）
+2. 左上（top-left）
+3. 右上（top-right）
+4. 右下（bottom-right）
 
-## Source layout
-
-The source tree follows the current auto-aim pipeline boundaries:
+## 源码结构
 
 ```text
 src/
-  app/          Application entry point and simulator/inference orchestration
-  ballistics/   Standalone gravity-only projectile trajectory solver
-  control/      Absolute gimbal-angle advice from odom targets and ballistics
-  coordinates/  Explicit O/B/G/C transforms and simulator pose adapter
-  detection/    YOLO pose model adapter and armor detection results
-  pose/         Camera-frame armor PnP and coordinate definitions
-  web/          Headless HTTP/MJPEG debug stream and pose/aim telemetry
-  test/         Detector, PnP, ballistics, coordinate, and aim tests
+  app/          程序入口、模拟器与推理流程编排
+  ballistics/   独立的仅受重力影响的弹道求解器
+  control/      基于里程计目标和弹道的云台绝对角度建议
+  coordinates/  显式 O/B/G/C 坐标变换和模拟器位姿适配器
+  detection/    YOLO 姿态模型适配器与装甲板检测结果
+  pose/         相机坐标系装甲板 PnP 与坐标定义
+  web/          无界面 HTTP/MJPEG 调试流与位姿/瞄准遥测
+  test/         检测、PnP、弹道、坐标和瞄准测试
 ```
 
-`app` currently owns the end-to-end loop, including TCP frame acquisition,
-scene control, camera-frame PnP, synchronized pose lookup, display, recording,
-and browser debug streaming. Coordinate transforms, ballistics, and gimbal
-angle advice are independent modules. Tracking/prediction remains external and
-feeds a predicted odom target through the same aim API. No gimbal command or
-firing request is sent.
+`app` 负责 TCP 图像接收、场景控制、相机坐标系 PnP、同步位姿查询、显示、录像和浏览器调试
+推流。坐标变换、弹道和云台角度建议是独立模块。跟踪/预测在模块外部进行，并通过同一瞄准 API
+传入预测的里程计目标。默认不会发送云台指令或开火请求。
 
-## Build
+## 构建
 
-From the workspace root in a Visual Studio developer shell:
+在工作区根目录的 Visual Studio 开发者命令行中执行：
 
 ```powershell
 cmake --preset windows-vs2022 -S .\yoloDetect
@@ -45,13 +39,11 @@ cmake --build .\yoloDetect\build\windows-vs2022 --config Release
 ctest --test-dir .\yoloDetect\build\windows-vs2022 -C Release --output-on-failure
 ```
 
-The default model is `models/armor_pose_0815_640.onnx`; the build copies it and
-all required runtime DLLs next to the executable. CUDA 12.6 and cuDNN 9 runtime
-DLLs are loaded from `trains/.venv/Lib/site-packages/torch/lib`, so keep the
-training virtual environment available when running this local build. Override
-the default model at runtime with `--model <path>` when needed.
+默认模型为 `models/armor_pose_0815_640.onnx`。构建时会将它和所需运行时 DLL 复制到
+可执行文件旁。CUDA 12.6 和 cuDNN 9 运行时 DLL 从
+`trains/.venv/Lib/site-packages/torch/lib` 加载。可通过 `--model <path>` 覆盖默认模型。
 
-For the deployed Daedalus 1.3.1 AutoDL environment, use the Linux preset:
+部署到 Daedalus 1.3.1 AutoDL 环境时使用 Linux 预设：
 
 ```bash
 cd /root/autoaim-dev/myAutoAim/yoloDetect
@@ -59,200 +51,154 @@ cmake --preset linux-autodl
 cmake --build build/linux-autodl --parallel
 ```
 
-The Linux build copies locally available ONNX models and ONNX Runtime provider
-libraries next to `build/linux-autodl/yolo_detect`.
+Linux 构建会将本地可用 ONNX 模型和 ONNX Runtime Provider 库复制到
+`build/linux-autodl/yolo_detect` 旁。
 
-## Run
+## 运行
 
-Start Daedalus Simulator first, then run:
+先启动 Daedalus Simulator，再执行：
 
 ```powershell
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe
 ```
 
-CUDA device 0 is the default. The program prints `backend=cuda device=0` before
-loading the model. Select another CUDA device or explicitly fall back to CPU
-with:
+默认使用 CUDA 设备 0，加载模型前程序会输出 `backend=cuda device=0`。选择其他设备或显式
+使用 CPU：
 
 ```powershell
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --device 0
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --cpu
 ```
 
-The default 0815 model uses a low object-confidence threshold of `0.01`.
-Override it with a normal threshold such as `0.25` after validating that value
-against the deployed model:
+默认 0815 模型使用较低的目标置信度阈值 `0.01`。验证部署模型后，可通过正常阈值（如 `0.25`）
+覆盖：
 
 ```powershell
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --conf 0.25
 ```
 
-Run `yolo_detect.exe --help` for all connection, model, threshold, and display
-options. Press Q or Escape to close the visualization window.
+执行 `yolo_detect.exe --help` 查看连接、模型、阈值和显示选项。按 `Q` 或 `Esc` 关闭可视化窗口。
 
-## Camera-frame PnP
+## 相机坐标系 PnP
 
-Each accepted detection is solved independently with OpenCV IPPE. Image and
-model points use the fixed `BL, TL, TR, BR` order. The armor frame origin is at
-the plate center, `+x_A` is the plate normal, `+y_A` points toward plate-left,
-and `+z_A` points up. `PoseResult::tvec_m` is therefore the armor center in the
-OpenCV camera frame (`+x` right, `+y` down, `+z` forward), in meters.
-No component of `rvec` is interpreted as vehicle or gimbal yaw.
+每个通过校验的检测结果均使用 OpenCV IPPE 独立求解。图像点和模型点固定使用 `BL, TL, TR, BR`
+顺序。装甲板坐标系原点位于板中心，`+x_A` 为板法线方向，`+y_A` 指向板左侧，`+z_A` 向上。
+`PoseResult::tvec_m` 是以米为单位的装甲板中心在 OpenCV 相机坐标系中的位置（`+x` 向右、
+`+y` 向下、`+z` 向前）。`rvec` 的任何分量都不解释为车辆或云台偏航角。
 
-The executable uses the Daedalus 1.3.1 fixed 1440x1080 calibration and rejects
-frames with a different resolution. Select the physical plate template
-explicitly; the detector class IDs are not used to guess its size:
+程序使用 Daedalus 1.3.1 固定的 1440x1080 标定，并拒绝其他分辨率的帧。请显式选择物理装甲板
+模板；检测器类别 ID 不用于推断尺寸：
 
 ```bash
 ./build/linux-autodl/yolo_detect --armor-size small
 ./build/linux-autodl/yolo_detect --armor-size large
 ```
 
-The annotated image shows the armor axes, camera-frame center, reprojection RMS,
-and IPPE candidate count. The web page presents the same values in a live table;
-its machine-readable endpoint is `/api/status`.
+标注图像会显示装甲板轴、相机坐标系中心、重投影 RMS 和 IPPE 候选数量。网页会在实时表格中展示
+相同数据；机器可读接口为 `/api/status`。
 
-## Vacuum ballistics
+## 真空弹道
 
-`ballistics::VacuumBallisticSolver` solves a stationary target analytically with
-constant gravity and no aerodynamic drag. Its input is deliberately limited to
-muzzle-frame scalar geometry: horizontal distance and vertical offset, both in
-meters, with vertical positive upward. It does not accept OpenCV camera-frame
-coordinates or produce the simulator's offset pitch command.
+`ballistics::VacuumBallisticSolver` 使用恒定重力、无空气阻力的解析公式求解静止目标。它的输入
+限制为炮口坐标系标量几何量：以米为单位的水平距离和竖直偏移，竖直向上为正。该模块不接受
+OpenCV 相机坐标，也不生成模拟器带偏移的俯仰指令。
 
-The projectile defaults match Daedalus 1.3.1: 25 m/s muzzle speed, 5 s lifetime,
-0.05 s firing cooldown, 17 mm diameter, 3.2 g mass, and zero linear damping. The
-solver uses an explicit, configurable gravity magnitude of 9.81 m/s^2 and returns
-low- or high-arc pitch, flight time, launch velocity components,
-and gravity drop. It rejects invalid input, unreachable targets, non-zero linear
-damping, and trajectories that exceed projectile lifetime. Diameter and mass are
-retained as physical configuration but do not enter the vacuum equations.
+弹丸默认参数与 Daedalus 1.3.1 一致：初速 25 m/s、寿命 5 s、射击冷却 0.05 s、直径 17 mm、
+质量 3.2 g、线性阻尼为零。求解器使用显式且可配置的 9.81 m/s^2 重力值，返回低/高弹道俯仰、
+飞行时间、发射速度分量和重力下坠量。它会拒绝无效输入、不可达目标、非零线性阻尼和超过弹丸
+寿命的轨迹。
 
-The aim pipeline connects this solver to PnP through explicit coordinate and
-control layers. The ballistic solver itself remains independent of camera
-geometry, tracking, SDK command transport, and firing decisions.
+## 坐标系与云台瞄准
 
-## Coordinate frames and gimbal aim
+运行时坐标约定如下：
 
-The runtime coordinate contract is:
+- `O`：ROS odom，`+x` 向前、`+y` 向左、`+z` 向上。
+- `B`：底盘 ROS 坐标系，轴向约定相同。
+- `G`：云台/炮口坐标系，`+x` 沿发射方向、`+y` 向左、`+z` 向上。
+- `C`：OpenCV 相机坐标系，`+x` 向右、`+y` 向下、`+z` 向前。
 
-- `O`: ROS odom, `+x` forward, `+y` left, `+z` up.
-- `B`: chassis ROS frame with the same axis convention.
-- `G`: gimbal/muzzle frame, `+x` along the launch direction, `+y` left,
-  `+z` up.
-- `C`: OpenCV camera frame, `+x` right, `+y` down, `+z` forward.
+固定相机轴映射为 `p_G = (z_C, -x_C, -y_C)`。适配器针对每张图像读取与 `source_sequence`
+对应的曝光状态。底盘四元数提供 `R_OB`，云台旋转为 `Rz(yaw) * Ry(-elevation)`。相机和炮口偏移
+从 SDK `PoseMeta` 在运行时读取；重建的相机位置必须在 0.01 m 内匹配曝光位置。
 
-The fixed camera-axis mapping is
-`p_G = (z_C, -x_C, -y_C)`. For each image, the adapter reads the exposure
-state matching `source_sequence`. The chassis quaternion supplies `R_OB`,
-and the gimbal rotation is `Rz(yaw) * Ry(-elevation)`. Camera and muzzle
-offsets are read from SDK `PoseMeta` at runtime; the reconstructed camera
-position must agree with the exposure position within 0.01 m.
+有效 PnP 中心会转换为 `target_center_odom_m`。`GimbalAimSolver` 因炮口随偏航和俯仰移动而对
+指令角迭代求解，每轮计算低弹道，返回模拟器绝对 `yaw_command_deg` 和 `pitch_command_deg`，其中
+90 度表示水平。结果还包含飞行时间、重力下坠、目标和炮口 odom 位置，以及明确失败状态。俯仰
+建议限制在模拟器 45 至 135 度范围内。
 
-A valid PnP center is transformed into `target_center_odom_m`.
-`GimbalAimSolver` iterates the command angle because the muzzle position moves
-with yaw and pitch, solves the low vacuum trajectory at every iteration, and
-returns absolute simulator `yaw_command_deg` and `pitch_command_deg`, where
-90 degrees is level. It also returns time of flight, gravity drop, target and
-muzzle odom positions, and explicit failure status. Pitch advice is limited to
-the simulator's 45 to 135 degree range.
+当前目标和未来预测目标使用同一 odom 目标 API。预测仅通过 `predicted` 与
+`prediction_horizon_s` 元数据传递。只有操作员在网页中显式启用静态跟随或请求射击后，程序才会
+发送云台命令。
 
-Current and future predicted targets use the same odom target API. Prediction
-stays outside the solver and is carried only as `predicted` and
-`prediction_horizon_s` metadata. The application does not send a gimbal command
-until the operator explicitly enables static follow or requests a shot from the
-web page.
+静态跟随会在 `O` 中一次性捕获 PnP 重投影 RMS 最低的有效装甲板中心，之后持续针对该固定世界点
+求解并发送绝对偏航/俯仰命令，不会被后续检测替换。停止跟随会清除已捕获目标并取消待处理射击。
 
-Static follow captures the valid armor center with the lowest PnP reprojection
-RMS once in `O`, then keeps solving and sending absolute yaw/pitch commands
-against that fixed world point. It does not replace the target with later
-detections. Stopping follow clears the captured target and cancels any pending
-shot.
+## 无界面 Web 调试
 
-## Headless web debugging
-
-On a server without a desktop, use `--no-display --web` to publish the same
-annotated frame used by the local OpenCV window as an MJPEG stream:
+在没有桌面环境的服务器上，使用 `--no-display --web` 将本地 OpenCV 窗口使用的同一标注帧发布为
+MJPEG 流：
 
 ```bash
 ./yolo_detect --no-display --web 8080 \
   --ipc-dir /root/autoaim-dev/daedalus-simulator-1.3.1/runtime/talos-ipc
 ```
 
-The web server binds to `127.0.0.1` by default, so it is not exposed publicly.
-From Windows, forward the port through SSH and open the printed URL in a local
-browser:
+Web 服务器默认绑定到 `127.0.0.1`，不会对公网暴露。从 Windows 通过 SSH 转发端口，再用本地
+浏览器打开输出的 URL：
 
 ```powershell
 ssh -N -L 8080:127.0.0.1:8080 autodl-4090
 ```
 
-Then browse to `http://127.0.0.1:8080/`. The raw stream and a single JPEG are
-also available at `/stream.mjpg` and `/snapshot.jpg`. To deliberately expose
-the stream on a trusted private network, add `--web-bind 0.0.0.0`.
+随后访问 `http://127.0.0.1:8080/`。原始流和单帧 JPEG 分别为 `/stream.mjpg` 与
+`/snapshot.jpg`。如需在可信私有网络中主动暴露服务，添加 `--web-bind 0.0.0.0`。JPEG 质量由
+`--web-quality <1..100>` 设置，默认值为 80。即便设置 `--no-display`，Web 模式仍会绘制并编码
+标注帧。
 
-The JPEG quality is configurable with `--web-quality <1..100>` (default 80).
-Web mode draws and encodes annotated frames even when `--no-display` is set.
+网页还提供 OpenCV 窗口键盘可用的模拟器控制：Shooting Range、Energy、重置、车辆运动和速度
+调整。命令会排队并由检测线程执行，因此浏览器不会并发访问 Daedalus SDK。Daedalus 1.3.1 竞赛
+构建仅提供 Shooting Range 和 Energy，网页不会显示不可用场景。
 
-The page also exposes the simulator controls that were previously available by
-keyboard in the OpenCV window: Shooting Range, Energy, reset, vehicle motion,
-and speed adjustment. Commands are queued and executed on the detector thread,
-so the browser never accesses the Daedalus SDK concurrently. Daedalus 1.3.1
-contest builds only expose Shooting Range and Energy; unavailable scenes are
-not shown on the web page.
+`Start Static Follow` 启用固定世界点云台跟随。`Fire Once` 可在跟随开启或关闭时使用：必要时先
+捕获目标，持续瞄准，并等待绝对偏航和俯仰误差都不超过 0.5 度；3 秒内未对准则取消。对准后仅
+发送一条带 `fire_advice=true` 的已跟踪 UDP 指令，普通跟随指令始终为 false。默认不会发送云台
+或开火数据报。Web 状态会报告锁定的 odom 目标、控制器状态、最后跟踪指令 ID 以及最后命令是否
+请求开火。
 
-The `Start Static Follow` button enables fixed-world-point gimbal following.
-The `Fire Once` button may be used with or without follow: it captures a target
-if necessary, continuously aims, and waits until both absolute yaw and pitch
-errors are at most 0.5 degrees. The request is cancelled if alignment is not
-reached within 3 seconds. After alignment, exactly one tracked UDP command is
-sent with `fire_advice=true`; ordinary follow commands always set it to false.
-No gimbal or fire datagram is sent by default.
+## 场景与车辆控制
 
-The web status reports the latched odom target, controller state, last tracked
-command ID, and whether the last sent command requested fire.
+可视化窗口维护一个 Daedalus 场景控制会话。单击窗口使其获得焦点后，可使用：
 
-## Scene and vehicle controls
+- `1`：装甲板场景
+- `2`：能量机关场景
+- `3`：前哨站场景
+- `4`：射击场场景
+- `0`：重置当前场景
+- `S`：停止射击场车辆
+- `L`：车辆直线运动
+- `P`：原地旋转
+- `B`：直线运动并旋转
+- `+` / `-`：提高/降低直线速度
 
-The visualization window also owns a Daedalus scene-control session. Click the
-window once, then use:
-
-- `1`: Armor scene
-- `2`: Energy scene
-- `3`: Outpost scene
-- `4`: Shooting Range scene
-- `0`: Reset the current scene
-- `S`: Stop the shooting-range vehicle
-- `L`: Linear vehicle motion
-- `P`: Spin in place
-- `B`: Linear motion and spin
-- `+` / `-`: Increase or decrease linear speed
-
-The default vehicle is target 3, with a speed of 1.5 m/s and a speed step of
-0.25 m/s. Override these values at startup when needed:
+默认车辆目标 ID 为 3，速度为 1.5 m/s，速度步长为 0.25 m/s。可在启动时覆盖：
 
 ```powershell
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe `
   --target 3 --speed 2.0 --speed-step 0.5
 ```
 
-Vehicle motion commands apply to the Shooting Range scene. A rejected SDK
-command is shown in the window and logged to the console without stopping image
-reception or YOLO inference.
+车辆运动命令应用于射击场场景。SDK 命令被拒绝时会在窗口和控制台显示，但不会中断图像接收或
+YOLO 推理。
 
-## Headless benchmark
+## 无界面基准测试
 
-To measure SDK reception and inference without any drawing, resizing, window
-refresh, or keyboard handling, run a fixed number of frames:
+在不绘制、不缩放、不刷新窗口且不处理键盘的情况下测量 SDK 接收与推理性能：
 
 ```powershell
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe `
   --no-display --frames 300
 ```
 
-The final summary reports processed frames per second, average model inference
-time, and source frames skipped while inference was busy.
-
-On the local RTX 4060 Laptop GPU, a 300-frame SDK benchmark measured 63.5 FPS
-and 12.4 ms average inference time. The previous CPU backend measured 24.0 FPS
-and 32.4 ms average inference time under the same headless workflow.
+最终汇总会报告处理帧率、平均模型推理时间，以及推理繁忙期间跳过的源帧数量。本地 RTX 4060
+Laptop GPU 的 300 帧 SDK 基准测试为 63.5 FPS 和 12.4 ms 平均推理时间；同样流程下先前 CPU
+后端为 24.0 FPS 和 32.4 ms。

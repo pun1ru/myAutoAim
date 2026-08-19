@@ -7,6 +7,7 @@
 #include <iostream>
 #include <string>
 
+// 加载指定模型和图像，验证一次端到端检测结果。
 int main(int argc, char** argv) {
   if (argc < 3 || argc > 4) {
     std::cerr << "usage: yolo_pose_smoke_test <model.onnx> <image> [--cpu]\n";

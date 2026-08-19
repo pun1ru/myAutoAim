@@ -68,13 +68,15 @@ struct WebFrameTelemetry {
   std::vector<WebPoseTelemetry> poses;
 };
 
-// A small, dependency-free HTTP server for local MJPEG debugging.
+// 用于本地 MJPEG 调试的小型无外部依赖 HTTP 服务器。
 class MjpegServer {
  public:
   struct State;
   using ControlHandler = std::function<bool(std::string_view)>;
 
+  // 启动本地 HTTP 监听器并关联控制回调。
   MjpegServer(WebServerOptions options, ControlHandler control_handler = {});
+  // 停止监听器并唤醒所有阻塞的流客户端。
   ~MjpegServer();
 
   MjpegServer(const MjpegServer&) = delete;
@@ -82,9 +84,12 @@ class MjpegServer {
   MjpegServer(MjpegServer&&) = delete;
   MjpegServer& operator=(MjpegServer&&) = delete;
 
+  // 编码并发布不带附加遥测的图像帧。
   void publish(const cv::Mat& bgr_frame);
+  // 编码并发布图像帧及其最新遥测快照。
   void publish(const cv::Mat& bgr_frame,
                const WebFrameTelemetry& telemetry);
+  // 返回已绑定本地服务器的根 URL。
   [[nodiscard]] std::string url() const;
 
  private:

@@ -17,17 +17,21 @@ constexpr double kArmorHeightM = 0.055;
 constexpr double kMinQuadrilateralAreaPx = 4.0;
 constexpr double kGeometryEpsilon = 1e-6;
 
+// 检查标定或位姿几何计算产生的标量。
 bool isFinite(double value) { return std::isfinite(value); }
 
+// 检查平移向量或 Rodrigues 向量的所有分量。
 bool isFinite(const cv::Vec3d& value) {
   return isFinite(value[0]) && isFinite(value[1]) && isFinite(value[2]);
 }
 
+// 检查旋转矩阵或相机矩阵的所有元素。
 bool isFinite(const cv::Matx33d& value) {
   return std::all_of(value.val, value.val + 9,
                      [](double element) { return isFinite(element); });
 }
 
+// 计算有符号图像面积，用于校验点绕序和退化情况。
 double signedArea(
     const std::array<cv::Point2f, kArmorPointCount>& points) {
   double twice_area = 0.0;
@@ -40,6 +44,7 @@ double signedArea(
   return twice_area * 0.5;
 }
 
+// 计算三点的有符号转向，用于线段相交检测。
 double orientation(const cv::Point2f& a, const cv::Point2f& b,
                    const cv::Point2f& c) {
   return (static_cast<double>(b.x) - a.x) *
@@ -48,6 +53,7 @@ double orientation(const cv::Point2f& a, const cv::Point2f& b,
              (static_cast<double>(c.x) - a.x);
 }
 
+// 在几何容差内判断共线点是否落在线段上。
 bool onSegment(const cv::Point2f& a, const cv::Point2f& b,
                const cv::Point2f& point) {
   return point.x >= std::min(a.x, b.x) - kGeometryEpsilon &&
@@ -56,6 +62,7 @@ bool onSegment(const cv::Point2f& a, const cv::Point2f& b,
          point.y <= std::max(a.y, b.y) + kGeometryEpsilon;
 }
 
+// 检测两条图像线段的正常相交和共线相交。
 bool segmentsIntersect(const cv::Point2f& a, const cv::Point2f& b,
                        const cv::Point2f& c, const cv::Point2f& d) {
   const double o1 = orientation(a, b, c);
@@ -76,12 +83,14 @@ bool segmentsIntersect(const cv::Point2f& a, const cv::Point2f& b,
   return false;
 }
 
+// 拒绝对边相交的四边形。
 bool selfIntersects(
     const std::array<cv::Point2f, kArmorPointCount>& points) {
   return segmentsIntersect(points[0], points[1], points[2], points[3]) ||
          segmentsIntersect(points[1], points[2], points[3], points[0]);
 }
 
+// 将 OpenCV 的三元素结果转换为有限的双精度向量。
 bool matToVector(const cv::Mat& source, cv::Vec3d& destination) {
   if (source.total() != 3) return false;
   cv::Mat converted;
@@ -91,6 +100,7 @@ bool matToVector(const cv::Mat& source, cv::Vec3d& destination) {
   return isFinite(destination);
 }
 
+// 将 OpenCV 的 3x3 矩阵复制到固定尺寸矩阵。
 cv::Matx33d matToMatrix(const cv::Mat& source) {
   cv::Mat converted;
   source.convertTo(converted, CV_64F);
@@ -103,6 +113,7 @@ cv::Matx33d matToMatrix(const cv::Mat& source) {
   return result;
 }
 
+// 验证每个物理装甲板角点的相机深度均为正。
 bool allCornersInFront(
     const std::array<cv::Point3d, kArmorPointCount>& object_points,
     const cv::Matx33d& rotation, const cv::Vec3d& translation) {
@@ -114,6 +125,7 @@ bool allCornersInFront(
   return true;
 }
 
+// 拒绝 OpenCV PnP 不支持的相机内参和畸变向量。
 void validateCalibration(const CameraCalibration& calibration) {
   if (calibration.image_size.width <= 0 ||
       calibration.image_size.height <= 0) {
@@ -147,6 +159,7 @@ void validateCalibration(const CameraCalibration& calibration) {
 
 }  // namespace
 
+// 返回配置的装甲板模板名称。
 const char* armorSizeName(ArmorSize armor_size) noexcept {
   switch (armor_size) {
     case ArmorSize::Small:
@@ -157,6 +170,7 @@ const char* armorSizeName(ArmorSize armor_size) noexcept {
   return "unknown";
 }
 
+// 返回位姿输入校验或求解过程的诊断信息。
 const char* poseStatusName(PoseStatus status) noexcept {
   switch (status) {
     case PoseStatus::Success:
@@ -183,11 +197,13 @@ const char* poseStatusName(PoseStatus status) noexcept {
   return "unknown pose status";
 }
 
+// 校验 PnP 所需条件后保存相机内参。
 ArmorPoseEstimator::ArmorPoseEstimator(CameraCalibration calibration)
     : calibration_(std::move(calibration)) {
   validateCalibration(calibration_);
 }
 
+// 校验有序关键点，并选取深度为正的最佳 IPPE 候选解。
 PoseResult ArmorPoseEstimator::estimate(
     const std::array<cv::Point2f, kArmorPointCount>& image_points,
     cv::Size image_size, ArmorSize armor_size) const {
@@ -225,9 +241,8 @@ PoseResult ArmorPoseEstimator::estimate(
   const auto object_point_array = objectPoints(armor_size);
   const std::vector<cv::Point3d> object_points(object_point_array.begin(),
                                                object_point_array.end());
-  // OpenCV 4.5 IPPE requires its internal model plane to be z=0. The public
-  // armor frame remains x_A=0; this proper rotation maps A to the temporary
-  // IPPE frame P as p_P=(y_A,z_A,x_A).
+  // OpenCV 4.5 的 IPPE 要求内部模型平面位于 z=0。公开装甲板坐标系仍保持
+  // x_A=0；此保向旋转将 A 映射到临时 IPPE 坐标系 P：p_P=(y_A,z_A,x_A)。
   const cv::Matx33d rotation_ippe_from_armor(
       0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0);
   std::vector<cv::Point3d> ippe_object_points;
@@ -315,10 +330,12 @@ PoseResult ArmorPoseEstimator::estimate(
   return result;
 }
 
+// 返回所有投影操作使用的不可变标定参数。
 const CameraCalibration& ArmorPoseEstimator::calibration() const noexcept {
   return calibration_;
 }
 
+// 按检测器关键点顺序构建以中心为原点的物理装甲板角点。
 std::array<cv::Point3d, kArmorPointCount> ArmorPoseEstimator::objectPoints(
     ArmorSize armor_size) {
   const double width = armor_size == ArmorSize::Small ? kSmallArmorWidthM

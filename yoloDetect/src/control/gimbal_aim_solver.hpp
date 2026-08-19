@@ -51,24 +51,27 @@ struct GimbalAimResult {
   std::size_t iterations = 0;
 };
 
+// 将瞄准结果状态转换为可读的诊断信息。
 [[nodiscard]] const char* aimStatusName(AimStatus status) noexcept;
 
 class GimbalAimSolver {
  public:
+  // 使用已校验的弹道和瞄准选项创建绝对角度求解器。
   explicit GimbalAimSolver(
       ballistics::VacuumBallisticSolver ballistic_solver =
           ballistics::VacuumBallisticSolver{},
       GimbalAimOptions options = GimbalAimOptions{});
 
-  // Returns absolute simulator command angles. pitch_command_deg uses the
-  // simulator convention: 90 degrees is level and larger values aim upward.
-  // This method only computes advice; it never sends a command or fires.
+  // 返回模拟器绝对指令角度。pitch_command_deg 遵循模拟器约定：90 度表示水平，
+  // 更大值表示向上瞄准。本方法只计算建议值，不发送指令也不触发开火。
   [[nodiscard]] GimbalAimResult solve(
       const AimTarget& target,
       const coordinates::CoordinateSnapshot& snapshot) const noexcept;
 
+  // 返回用于轨迹计算的弹道求解器。
   [[nodiscard]] const ballistics::VacuumBallisticSolver& ballisticSolver()
       const noexcept;
+  // 返回已校验的角度限制和迭代设置。
   [[nodiscard]] const GimbalAimOptions& options() const noexcept;
 
  private:

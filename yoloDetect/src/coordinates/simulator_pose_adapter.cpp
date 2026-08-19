@@ -10,16 +10,19 @@ namespace {
 
 namespace sdk = daedalus::sim::sdk::v1;
 
+// Promotes an SDK float triplet to the coordinate module's double precision.
 cv::Vec3d vec3(const float value[3]) {
   return {static_cast<double>(value[0]), static_cast<double>(value[1]),
           static_cast<double>(value[2])};
 }
 
+// Promotes an SDK WXYZ float quaternion to double precision.
 cv::Vec4d vec4(const float value[4]) {
   return {static_cast<double>(value[0]), static_cast<double>(value[1]),
           static_cast<double>(value[2]), static_cast<double>(value[3])};
 }
 
+// Checks that a fixed simulator offset contains no invalid component.
 bool finite(const cv::Vec3d& value) {
   return std::isfinite(value[0]) && std::isfinite(value[1]) &&
          std::isfinite(value[2]);
@@ -27,6 +30,7 @@ bool finite(const cv::Vec3d& value) {
 
 }  // namespace
 
+// Opens Talos metadata and caches the local camera and muzzle offsets.
 bool SimulatorPoseAdapter::open(
     const std::filesystem::path& ipc_directory) {
   close();
@@ -79,15 +83,18 @@ bool SimulatorPoseAdapter::open(
   return true;
 }
 
+// Releases Talos metadata resources and invalidates cached offsets.
 void SimulatorPoseAdapter::close() noexcept {
   mapping_.close();
   offsets_valid_ = false;
 }
 
+// Reports whether metadata and the required local offsets are available.
 bool SimulatorPoseAdapter::isOpen() const noexcept {
   return mapping_.isOpen() && offsets_valid_;
 }
 
+// Reads the exposure state associated with a received image frame.
 CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
     std::uint64_t frame_sequence,
     double camera_position_tolerance_m) const {
@@ -140,14 +147,17 @@ CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
   return snapshot;
 }
 
+// Returns the camera's fixed position relative to the gimbal origin.
 const cv::Vec3d& SimulatorPoseAdapter::cameraOffsetGimbalM() const noexcept {
   return camera_offset_gimbal_m_;
 }
 
+// Returns the muzzle's fixed position relative to the gimbal origin.
 const cv::Vec3d& SimulatorPoseAdapter::muzzleOffsetGimbalM() const noexcept {
   return muzzle_offset_gimbal_m_;
 }
 
+// Returns the latest error produced while opening or reading metadata.
 const std::string& SimulatorPoseAdapter::lastError() const noexcept {
   return last_error_;
 }

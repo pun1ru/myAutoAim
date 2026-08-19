@@ -30,29 +30,42 @@ class StaticTargetController {
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
 
+  // Creates a controller with a validated aim solver and state-machine options.
   explicit StaticTargetController(
       GimbalAimSolver aim_solver = GimbalAimSolver{},
       StaticTargetControllerOptions options =
           StaticTargetControllerOptions{});
 
+  // Starts capture when idle, or cancels follow and any pending shot when active.
   void toggleFollowing();
+  // Arms one shot, which is emitted only after the target is aligned.
   void requestFire(TimePoint now = Clock::now());
 
+  // Captures a target if needed, solves aim, and advances the fire state machine.
   [[nodiscard]] StaticTargetCommand update(
       const std::optional<cv::Vec3d>& capture_candidate_odom_m,
       const coordinates::CoordinateSnapshot& snapshot,
       TimePoint now = Clock::now());
 
+  // Records a successfully sent command and completes a fired one-shot request.
   void acknowledgeCommand(std::uint64_t command_id, bool fired);
+  // Clears a pending shot after transport rejects the command.
   void reportSendFailure(const std::string& message);
 
+  // Reports whether static-target following is currently enabled.
   [[nodiscard]] bool following() const noexcept;
+  // Reports whether the next valid detection still needs to be captured.
   [[nodiscard]] bool capturePending() const noexcept;
+  // Reports whether a one-shot request is waiting for alignment or transport.
   [[nodiscard]] bool firePending() const noexcept;
+  // Reports whether the most recently acknowledged command requested fire.
   [[nodiscard]] bool lastCommandFired() const noexcept;
+  // Returns the identifier of the most recently acknowledged command.
   [[nodiscard]] std::uint64_t lastCommandId() const noexcept;
+  // Returns the world-fixed target currently latched by the controller.
   [[nodiscard]] const std::optional<cv::Vec3d>& staticTargetOdomM()
       const noexcept;
+  // Returns the latest user-facing controller state message.
   [[nodiscard]] const std::string& status() const noexcept;
 
  private:

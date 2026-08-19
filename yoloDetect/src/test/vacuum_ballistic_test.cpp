@@ -11,16 +11,19 @@ namespace {
 
 int failures = 0;
 
+// 在条件失败时记录测试断言。
 void expect(bool condition, const char* message) {
   if (condition) return;
   std::cerr << "FAIL: " << message << '\n';
   ++failures;
 }
 
+// 以给定绝对误差比较两个浮点数。
 bool nearlyEqual(double actual, double expected, double tolerance) {
   return std::abs(actual - expected) <= tolerance;
 }
 
+// 用弹道解正向计算命中时的竖直高度。
 double forwardHeight(const ballistics::BallisticSolution& solution,
                      double gravity_mps2) {
   const double time = solution.time_of_flight_s;
@@ -28,6 +31,7 @@ double forwardHeight(const ballistics::BallisticSolution& solution,
          0.5 * gravity_mps2 * time * time;
 }
 
+// 验证求解器默认参数与模拟器弹丸配置一致。
 void testSimulatorDefaults() {
   const ballistics::VacuumBallisticSolver solver;
   const auto& parameters = solver.parameters();
@@ -49,6 +53,7 @@ void testSimulatorDefaults() {
          "0.05 s cooldown must correspond to 20 Hz");
 }
 
+// 验证水平目标低弹道的解析解和正向积分结果。
 void testLevelLowArc() {
   const ballistics::VacuumBallisticSolver solver;
   const ballistics::BallisticTarget target{10.0, 0.0};
@@ -77,6 +82,7 @@ void testLevelLowArc() {
          "level-target launch rise must equal gravity drop");
 }
 
+// 验证高于炮口的目标可由运动方程反算命中。
 void testElevatedTargetRoundTrip() {
   const ballistics::VacuumBallisticSolver solver;
   const ballistics::BallisticTarget target{8.0, 1.25};
@@ -90,6 +96,7 @@ void testElevatedTargetRoundTrip() {
          "elevated target must round-trip through the motion equation");
 }
 
+// 验证不可达目标和超寿命高弹道会被拒绝。
 void testUnreachableAndLifetimeLimits() {
   const ballistics::VacuumBallisticSolver solver;
   const auto unreachable = solver.solve({100.0, 0.0});
@@ -104,6 +111,7 @@ void testUnreachableAndLifetimeLimits() {
          "high arc exceeding the 5 s lifetime must be rejected");
 }
 
+// 验证非法输入及不支持的弹丸参数会被明确拒绝。
 void testInputAndParameterValidation() {
   const ballistics::VacuumBallisticSolver solver;
   const auto non_finite = solver.solve(
@@ -141,6 +149,7 @@ void testInputAndParameterValidation() {
 
 }  // namespace
 
+// 运行全部真空弹道单元测试。
 int main() {
   testSimulatorDefaults();
   testLevelLowArc();

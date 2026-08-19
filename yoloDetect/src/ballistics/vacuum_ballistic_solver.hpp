@@ -18,8 +18,8 @@ enum class BallisticStatus {
   NumericalFailure,
 };
 
-// Daedalus 1.3.1 projectile defaults plus an explicit solver gravity.
-// Diameter and mass do not enter the vacuum trajectory equations.
+// Daedalus 1.3.1 的弹丸默认参数，以及显式的求解器重力值。
+// 直径和质量不参与真空弹道方程。
 struct ProjectileParameters {
   double muzzle_speed_mps = 25.0;
   double lifetime_s = 5.0;
@@ -30,8 +30,7 @@ struct ProjectileParameters {
   double gravity_mps2 = 9.81;
 };
 
-// Scalar geometry in the muzzle frame. Horizontal distance is measured in the
-// level plane; vertical offset is positive upward from the muzzle.
+// 炮口坐标系中的标量几何量。水平距离在水平面中测量，竖直偏移以炮口向上为正。
 struct BallisticTarget {
   double horizontal_distance_m = 0.0;
   double vertical_offset_m = 0.0;
@@ -52,23 +51,27 @@ struct BallisticSolution {
   double gravity_drop_m = std::numeric_limits<double>::quiet_NaN();
 };
 
+// 将弹道弧线枚举转换为稳定的诊断名称。
 [[nodiscard]] const char* trajectoryArcName(TrajectoryArc arc) noexcept;
+// 将弹道求解状态转换为可读的诊断信息。
 [[nodiscard]] const char* ballisticStatusName(BallisticStatus status) noexcept;
 
 class VacuumBallisticSolver {
  public:
+  // 校验弹丸物理参数后创建求解器。
   explicit VacuumBallisticSolver(
       ProjectileParameters parameters = ProjectileParameters{});
 
-  // Solves a stationary target using constant gravity and no aerodynamic drag.
-  // pitch_rad is zero at level aim and positive upward. It is not a simulator
-  // pitch command; coordinate transforms and the simulator's 90-degree offset
-  // belong to the future control layer.
+  // 在恒定重力、无空气阻力条件下求解静止目标。
+  // pitch_rad 在水平瞄准时为零，向上为正。它不是模拟器俯仰指令；坐标变换及
+  // 模拟器的 90 度偏移由控制层处理。
   [[nodiscard]] BallisticSolution solve(
       const BallisticTarget& target,
       TrajectoryArc arc = TrajectoryArc::Low) const noexcept;
 
+  // 返回此求解器使用的已校验弹丸参数。
   [[nodiscard]] const ProjectileParameters& parameters() const noexcept;
+  // 计算由冷却时间限制的最大射速。
   [[nodiscard]] double maximumFireRateHz() const noexcept;
 
  private:

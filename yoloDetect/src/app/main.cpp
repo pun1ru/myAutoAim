@@ -98,6 +98,7 @@ struct DetectionAim {
   yolo_detect::control::GimbalAimResult aim;
 };
 
+// 根据可执行文件位置推导随程序部署的默认模型路径。
 std::filesystem::path defaultModelPath(const char* executable) {
   std::error_code error;
   std::filesystem::path path = std::filesystem::absolute(executable, error);
@@ -105,6 +106,7 @@ std::filesystem::path defaultModelPath(const char* executable) {
   return path.parent_path() / "armor_pose_0815_640.onnx";
 }
 
+// 返回 Daedalus 1.3.1 固定分辨率对应的相机标定参数。
 yolo_detect::CameraCalibration simulatorCameraCalibration() {
   yolo_detect::CameraCalibration calibration;
   calibration.camera_matrix = cv::Matx33d(
@@ -115,6 +117,7 @@ yolo_detect::CameraCalibration simulatorCameraCalibration() {
   return calibration;
 }
 
+// 输出命令行参数、键盘控制和关键点顺序说明。
 void printUsage() {
   std::cout
       << "Daedalus YOLO armor pose detector\n\n"
@@ -159,6 +162,7 @@ void printUsage() {
       << "Press Q or Esc to close.\n";
 }
 
+// 读取当前命令行选项的必填参数值，并推进参数索引。
 std::string requireValue(int& index, int argc, char** argv) {
   if (index + 1 >= argc) {
     throw std::runtime_error(std::string("missing value for ") + argv[index]);
@@ -166,6 +170,7 @@ std::string requireValue(int& index, int argc, char** argv) {
   return argv[++index];
 }
 
+// 解析并校验位于闭区间 [0, 1] 的浮点选项。
 float parseUnitFloat(const std::string& value, const char* name) {
   const float parsed = std::stof(value);
   if (parsed < 0.0F || parsed > 1.0F) {
@@ -174,6 +179,7 @@ float parseUnitFloat(const std::string& value, const char* name) {
   return parsed;
 }
 
+// 解析并校验全部命令行选项。
 Options parseOptions(int argc, char** argv) {
   Options options;
   options.model = defaultModelPath(argv[0]);
@@ -350,6 +356,7 @@ Options parseOptions(int argc, char** argv) {
   return options;
 }
 
+// 将射击场车辆运动模式转换为显示名称。
 const char* motionName(daedalus_sdk::RangeMotionMode mode) {
   switch (mode) {
     case daedalus_sdk::RangeMotionMode::Stationary:
@@ -364,6 +371,7 @@ const char* motionName(daedalus_sdk::RangeMotionMode mode) {
   return "unknown";
 }
 
+// 将 SDK 场景控制调用结果转换为状态文本和成功标记。
 bool reportControl(
     const daedalus_sdk::ClientResult<daedalus_sdk::SceneControlResponse>& result,
     std::string_view operation, std::string& message) {
@@ -384,6 +392,7 @@ bool reportControl(
   return true;
 }
 
+// 按当前场景状态向 SDK 下发目标车辆运动设置。
 bool applyMotion(daedalus_sdk::SceneControlClient& client,
                  const SceneState& state, std::string& message) {
   daedalus_sdk::RangeTargetMotion motion;
@@ -403,12 +412,14 @@ bool applyMotion(daedalus_sdk::SceneControlClient& client,
                        "setRangeTargetMotion", message);
 }
 
+// 按指定小数位数格式化遥测数值。
 std::string fixed(double value, int precision = 1) {
   std::ostringstream stream;
   stream << std::fixed << std::setprecision(precision) << value;
   return stream.str();
 }
 
+// 在调试图像的指定状态行绘制文本。
 void drawText(cv::Mat& image, const std::string& text, int line,
               const cv::Scalar& color = {235, 235, 235}) {
   const cv::Point origin(16, 28 + line * 25);
@@ -418,6 +429,7 @@ void drawText(cv::Mat& image, const std::string& text, int line,
               cv::LINE_AA);
 }
 
+// 绘制检测框、关键点、PnP 位姿和可用的瞄准信息。
 void drawDetection(cv::Mat& image,
                    const yolo_detect::ArmorDetection& detection,
                    const yolo_detect::PoseResult& pose,
@@ -521,6 +533,7 @@ void drawDetection(cv::Mat& image,
   }
 }
 
+// 将本帧的位姿、坐标和控制器状态组装为网页遥测。
 yolo_detect::WebFrameTelemetry makeWebTelemetry(
     std::uint64_t source_sequence,
     const std::vector<yolo_detect::PoseResult>& poses,
@@ -605,6 +618,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
 
 }  // namespace
 
+// 初始化 SDK、检测与控制模块，并运行主图像处理循环。
 int main(int argc, char** argv) {
   Options options;
   try {
