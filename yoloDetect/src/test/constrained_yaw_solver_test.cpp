@@ -96,7 +96,13 @@ void testRecoversYawWithoutPnpRotation() {
                                   pose.center_camera_m);
   const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
   const auto result = solver.solve(snapshot, pose, points);
-  require(result.valid, "perfect constrained projection must produce reliable yaw");
+  if (!result.valid) {
+    throw std::runtime_error(
+        std::string("perfect constrained projection rejected: ") +
+        yolo_detect::tracking::reliableYawStatusName(result.status) +
+        " rms=" + std::to_string(result.reprojection_rms_px) +
+        " yaw_std=" + std::to_string(result.yaw_std_rad));
+  }
   require(std::abs(wrapToPi(result.inward_yaw_T_rad - kExpectedYaw)) < 1e-3,
           "constrained yaw must match synthetic tracker yaw");
   require(result.reprojection_rms_px < 1e-3,
