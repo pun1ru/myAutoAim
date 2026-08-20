@@ -549,20 +549,28 @@ bool WholeVehicleEkf::geometryObservable(
     const std::vector<Measurement>& measurements,
     const std::vector<Association>& associations) const {
   if (associations.size() < 2) return false;
+
+  bool has_reliable_yaw = false;
+  bool has_even_slot = false;
+  bool has_odd_slot = false;
   for (std::size_t first = 0; first < associations.size(); ++first) {
     const Association& a = associations[first];
     const Measurement& measurement_a =
         measurements[static_cast<std::size_t>(a.measurement_index)];
-    if (!a.includes_yaw) return false;
+    has_reliable_yaw = has_reliable_yaw || a.includes_yaw;
+    has_even_slot = has_even_slot || (a.armor_slot % 2 == 0);
+    has_odd_slot = has_odd_slot || (a.armor_slot % 2 != 0);
     for (std::size_t second = first + 1; second < associations.size(); ++second) {
       const Association& b = associations[second];
       const Measurement& measurement_b =
           measurements[static_cast<std::size_t>(b.measurement_index)];
-      if (!b.includes_yaw ||
-          (measurement_a.position_T_m - measurement_b.position_T_m).norm() <
-              options_.geometry_minimum_baseline_m) {
+      if ((measurement_a.position_T_m - measurement_b.position_T_m).norm() <
+          options_.geometry_minimum_baseline_m) {
         return false;
       }
+      // An unreliable yaw is deliberately position-only. Only compare phase
+      // when both constrained-yaw solutions were accepted for this update.
+      if (!a.includes_yaw || !b.includes_yaw) continue;
       const double measured_delta = wrapToPi(
           measurement_a.inward_yaw_T_rad - measurement_b.inward_yaw_T_rad);
       const double expected_delta = wrapToPi(
@@ -573,7 +581,7 @@ bool WholeVehicleEkf::geometryObservable(
       }
     }
   }
-  return true;
+  return has_reliable_yaw && has_even_slot && has_odd_slot;
 }
 
 bool WholeVehicleEkf::applyJointUpdate(

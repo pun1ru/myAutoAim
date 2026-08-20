@@ -249,14 +249,14 @@ void testLargeYawResidualBecomesPositionOnly() {
               "position-only zero residual must not pull theta");
 }
 
-void testSecondArmorWithPoorYawStillUsesPosition() {
+void testSecondArmorWithPoorYawStillUpdatesGeometry() {
   tracking::WholeVehicleEkfOptions options;
   options.confirming_hits = 1;
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
-  truth.x[tracking::RadiusEven] = options.radius_prior_m;
-  truth.x[tracking::RadiusOddDelta] = 0.0;
-  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::RadiusEven] = 0.22;
+  truth.x[tracking::RadiusOddDelta] = -0.04;
+  truth.x[tracking::HeightOddDelta] = 0.03;
   truth.x[tracking::VelocityX] = 0.0;
   truth.x[tracking::VelocityY] = 0.0;
   truth.x[tracking::VelocityZ] = 0.0;
@@ -282,8 +282,14 @@ void testSecondArmorWithPoorYawStillUsesPosition() {
   require(second != output.associated_observations.end() &&
               second->armor_slot == 1 && !second->includes_yaw,
           "poor yaw must select the adjacent slot as position-only");
-  requireNear(output.radius_even_m, options.radius_prior_m, 1e-12,
-              "position-only pair must keep geometry frozen");
+  require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
+              std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
+          "one reliable yaw plus two positions must reduce radius-prior error");
+  const Eigen::Vector3d expected_center(
+      truth.x[tracking::CenterX], truth.x[tracking::CenterY],
+      truth.x[tracking::CenterZ]);
+  require((output.center_T_m - expected_center).norm() < 0.08,
+          "mixed-yaw armor pair must correct the initialized vehicle center");
 }
 
 void testJointUpdateIndependentOfDetectionOrder() {
@@ -434,7 +440,7 @@ int main() {
     testTwoVisibleArmorsUpdateOneFrame();
     testSingleArmorDoesNotChangeGeometry();
     testLargeYawResidualBecomesPositionOnly();
-    testSecondArmorWithPoorYawStillUsesPosition();
+    testSecondArmorWithPoorYawStillUpdatesGeometry();
     testJointUpdateIndependentOfDetectionOrder();
     testRotatingSlotSequenceKeepsCenterStable();
     testLostPredictionAndReset();
