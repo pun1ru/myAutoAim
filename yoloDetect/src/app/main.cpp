@@ -591,13 +591,31 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
     const std::string& coordinate_message,
     const yolo_detect::control::StaticTargetController& gimbal_control,
-    const SceneState& scene_state) {
+    const SceneState& scene_state,
+    const yolo_detect::tracking::TrackOutput& tracker_output,
+    const std::vector<yolo_detect::tracking::ReliableYaw>& reliable_yaws,
+    std::size_t tracker_observation_count) {
   yolo_detect::WebFrameTelemetry telemetry;
   telemetry.source_sequence = source_sequence;
   telemetry.scene = scene_state.scene;
   telemetry.motion = motionName(scene_state.motion);
   telemetry.vehicle_speed_mps = scene_state.vehicle_speed;
   telemetry.spin_speed_deg_s = scene_state.spin_speed_deg_s;
+  telemetry.tracker_state = yolo_detect::tracking::trackingStateName(
+      tracker_output.tracking_state);
+  telemetry.tracker_has_state = tracker_output.has_state;
+  telemetry.tracker_observation_count = tracker_observation_count;
+  telemetry.reliable_yaw_count = static_cast<std::size_t>(std::count_if(
+      reliable_yaws.begin(), reliable_yaws.end(),
+      [](const yolo_detect::tracking::ReliableYaw& yaw) { return yaw.valid; }));
+  if (!reliable_yaws.empty()) {
+    const yolo_detect::tracking::ReliableYaw& yaw = reliable_yaws.front();
+    telemetry.tracker_yaw_status =
+        yolo_detect::tracking::reliableYawStatusName(yaw.status);
+    telemetry.tracker_yaw_diagnostic_valid =
+        std::isfinite(yaw.reprojection_rms_px);
+    telemetry.tracker_yaw_rms_px = yaw.reprojection_rms_px;
+  }
   telemetry.coordinate_valid = coordinate_snapshot.valid;
   telemetry.coordinate_status = coordinate_message;
   telemetry.camera_position_error_m =
@@ -1255,7 +1273,8 @@ int main(int argc, char** argv) {
             annotated,
             makeWebTelemetry(header.source_sequence, poses, detection_aims,
                              coordinate_snapshot, coordinate_message,
-                             gimbal_control, scene_state));
+                             gimbal_control, scene_state, tracker_output,
+                             reliable_yaws, tracker_measurements.size()));
       }
 
       if (!options.record_path.empty()) {

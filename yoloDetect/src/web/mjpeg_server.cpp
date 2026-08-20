@@ -134,6 +134,7 @@ std::string htmlPage() {
     <h2 id="pose-title">Pose and Aim</h2>
     <div class="frame-meta">
       <span id="coordinate-state">Coordinates unavailable</span>
+      <span id="tracker-state">EKF unavailable</span>
       <span id="pose-frame">Frame 0</span>
     </div>
   </div>
@@ -190,6 +191,7 @@ spinSpeedApply.addEventListener('click', () => {
 const poseRows = document.getElementById('pose-rows');
 const poseFrame = document.getElementById('pose-frame');
 const coordinateState = document.getElementById('coordinate-state');
+const trackerState = document.getElementById('tracker-state');
 const cell = (text) => {
   const element = document.createElement('td');
   element.textContent = text;
@@ -206,6 +208,12 @@ async function refreshPose() {
     coordinateState.textContent = state.coordinate_valid
       ? 'Odom ready | camera offset error ' + metric(state.camera_position_error_m, 4) + ' m'
       : state.coordinate_status;
+    const yawDiagnostic = state.tracker_yaw_rms_px === null
+      ? state.tracker_yaw_status
+      : state.tracker_yaw_status + ' | RMS ' + metric(state.tracker_yaw_rms_px, 2) + ' px';
+    trackerState.textContent = 'EKF ' + state.tracker_state +
+      ' | yaw ' + state.reliable_yaw_count + '/' + state.tracker_observation_count +
+      ' | ' + yawDiagnostic;
     followButton.textContent =
       state.gimbal_following ? 'Stop Static Follow' : 'Start Static Follow';
     followButton.classList.toggle('active', state.gimbal_following);
@@ -327,6 +335,22 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
          << "\",\"motion\":\"" << jsonEscape(telemetry.motion)
          << "\",\"vehicle_speed_mps\":" << telemetry.vehicle_speed_mps
          << ",\"spin_speed_deg_s\":" << telemetry.spin_speed_deg_s
+         << ",\"tracker_state\":\""
+         << jsonEscape(telemetry.tracker_state)
+         << "\",\"tracker_has_state\":"
+         << (telemetry.tracker_has_state ? "true" : "false")
+         << ",\"tracker_observation_count\":"
+         << telemetry.tracker_observation_count
+         << ",\"reliable_yaw_count\":" << telemetry.reliable_yaw_count
+         << ",\"tracker_yaw_status\":\""
+         << jsonEscape(telemetry.tracker_yaw_status) << "\"";
+  if (telemetry.tracker_yaw_diagnostic_valid &&
+      std::isfinite(telemetry.tracker_yaw_rms_px)) {
+    stream << ",\"tracker_yaw_rms_px\":" << telemetry.tracker_yaw_rms_px;
+  } else {
+    stream << ",\"tracker_yaw_rms_px\":null";
+  }
+  stream
          << ",\"coordinate_valid\":"
          << (coordinate_metrics_valid ? "true" : "false")
          << ",\"coordinate_status\":\""

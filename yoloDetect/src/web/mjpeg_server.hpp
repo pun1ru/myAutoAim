@@ -55,6 +55,13 @@ struct WebFrameTelemetry {
   std::string motion;
   double vehicle_speed_mps = 0.0;
   double spin_speed_deg_s = 0.0;
+  std::string tracker_state = "uninitialized";
+  bool tracker_has_state = false;
+  std::size_t tracker_observation_count = 0;
+  std::size_t reliable_yaw_count = 0;
+  std::string tracker_yaw_status = "no armor observations";
+  bool tracker_yaw_diagnostic_valid = false;
+  double tracker_yaw_rms_px = 0.0;
   bool coordinate_valid = false;
   std::string coordinate_status;
   double camera_position_error_m = 0.0;
