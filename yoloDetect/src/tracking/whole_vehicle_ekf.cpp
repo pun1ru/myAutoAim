@@ -390,6 +390,16 @@ bool WholeVehicleEkf::slotVisible(const Measurement& measurement,
                                   int armor_slot) const {
   if (!measurement.has_exposure_camera_geometry) return true;
   const Measurement predicted = observe(state_, armor_slot);
+  if (measurement.has_inward_yaw) {
+    const double yaw_innovation = wrapToPi(
+        measurement.inward_yaw_T_rad - predicted.inward_yaw_T_rad);
+    if (!finite(yaw_innovation) ||
+        std::abs(yaw_innovation) >
+            options_.maximum_yaw_update_innovation_rad) {
+      // A normal inferred from unreliable yaw must not veto a valid position.
+      return true;
+    }
+  }
   const Eigen::Vector3d to_camera =
       measurement.camera_position_T_m - predicted.position_T_m;
   if (to_camera.squaredNorm() <= 1e-12) return false;

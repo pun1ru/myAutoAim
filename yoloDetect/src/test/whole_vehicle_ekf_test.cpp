@@ -267,6 +267,8 @@ void testSecondArmorWithPoorYawStillUsesPosition() {
   tracking::Measurement slot_one =
       observationAt(truth, 1, timestamp_ns);
   slot_one.inward_yaw_T_rad -= 1.15;
+  slot_one.has_exposure_camera_geometry = true;
+  slot_one.camera_position_T_m = Eigen::Vector3d::Zero();
   const tracking::TrackOutput output =
       ekf.update(timestamp_ns, {slot_zero, slot_one});
   require(output.associated_observations.size() == 2,
