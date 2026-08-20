@@ -109,6 +109,7 @@ struct WebFrameTelemetry {
   double tracker_omega_rad_s = 0.0;
   double tracker_radius_even_m = 0.0;
   double tracker_radius_odd_delta_m = 0.0;
+  double tracker_radius_odd_m = 0.0;
   double tracker_height_odd_delta_m = 0.0;
   bool tracker_association_valid = false;
   int tracker_associated_slot = -1;

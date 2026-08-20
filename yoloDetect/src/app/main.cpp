@@ -627,6 +627,8 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     telemetry.tracker_omega_rad_s = tracker_output.omega_rad_s;
     telemetry.tracker_radius_even_m = tracker_output.radius_even_m;
     telemetry.tracker_radius_odd_delta_m = tracker_output.radius_odd_delta_m;
+    telemetry.tracker_radius_odd_m = tracker_output.radius_even_m +
+                                     tracker_output.radius_odd_delta_m;
     telemetry.tracker_height_odd_delta_m = tracker_output.height_odd_delta_m;
     telemetry.tracker_consecutive_hits = tracker_output.consecutive_hits;
     telemetry.tracker_consecutive_misses = tracker_output.consecutive_misses;

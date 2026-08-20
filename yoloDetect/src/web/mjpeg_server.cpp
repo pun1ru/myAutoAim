@@ -158,8 +158,8 @@ std::string htmlPage() {
   <div class="pose-heading"><h2 id="ekf-state-title">EKF State (T)</h2></div>
   <div class="pose-table-wrap">
     <table>
-      <thead><tr><th>C X m</th><th>C Y m</th><th>C Z m</th><th>V X m/s</th><th>V Y m/s</th><th>V Z m/s</th><th>Theta deg</th><th>Omega deg/s</th><th>r0 m</th><th>dr m</th><th>dz m</th><th>Slot</th><th>NIS</th><th>Hits</th><th>Misses</th></tr></thead>
-      <tbody id="ekf-state-rows"><tr><td colspan="15">No active EKF state</td></tr></tbody>
+      <thead><tr><th>C X m</th><th>C Y m</th><th>C Z m</th><th>V X m/s</th><th>V Y m/s</th><th>V Z m/s</th><th>Theta deg</th><th>Omega deg/s</th><th>r0 (E0/E2) m</th><th>dr m</th><th>r1 (E1/E3) m</th><th>dz m</th><th>Slot</th><th>NIS</th><th>Hits</th><th>Misses</th></tr></thead>
+      <tbody id="ekf-state-rows"><tr><td colspan="16">No active EKF state</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -327,6 +327,7 @@ async function refreshPose() {
       row.append(cell(metric(state.tracker_omega_rad_s * 180 / Math.PI, 2)));
       row.append(cell(metric(state.tracker_radius_even_m, 3)));
       row.append(cell(metric(state.tracker_radius_odd_delta_m, 3)));
+      row.append(cell(metric(state.tracker_radius_odd_m, 3)));
       row.append(cell(metric(state.tracker_height_odd_delta_m, 3)));
       row.append(cell(state.tracker_association_valid ? 'E' + state.tracker_associated_slot : '-'));
       row.append(cell(state.tracker_nis_valid ? metric(state.tracker_nis, 3) : '-'));
@@ -336,7 +337,7 @@ async function refreshPose() {
     } else {
       const row = document.createElement('tr');
       const empty = cell('No active EKF state');
-      empty.colSpan = 15;
+      empty.colSpan = 16;
       row.append(empty);
       stateRows.push(row);
     }
@@ -481,6 +482,8 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << telemetry.tracker_radius_even_m
            << ",\"tracker_radius_odd_delta_m\":"
            << telemetry.tracker_radius_odd_delta_m
+           << ",\"tracker_radius_odd_m\":"
+           << telemetry.tracker_radius_odd_m
            << ",\"tracker_height_odd_delta_m\":"
            << telemetry.tracker_height_odd_delta_m
            << ",\"tracker_consecutive_hits\":"
@@ -498,6 +501,7 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
               "\"tracker_omega_rad_s\":null,"
               "\"tracker_radius_even_m\":null,"
               "\"tracker_radius_odd_delta_m\":null,"
+              "\"tracker_radius_odd_m\":null,"
               "\"tracker_height_odd_delta_m\":null,"
               "\"tracker_consecutive_hits\":0,"
               "\"tracker_consecutive_misses\":0";
