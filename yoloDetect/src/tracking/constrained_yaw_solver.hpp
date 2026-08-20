@@ -17,6 +17,7 @@ enum class ReliableYawStatus {
 };
 
 struct ConstrainedYawOptions {
+  // 只有同时满足误差、可观测性、正反面歧义和可见面约束才输出可靠 yaw。
   double max_reprojection_rms_px = 4.0;
   double max_yaw_std_rad = 0.45;
   double min_facing_cosine = 0.20;
@@ -25,6 +26,7 @@ struct ConstrainedYawOptions {
 };
 
 struct ReliableYaw {
+  // yaw_std_rad 由重投影误差对 yaw 的有限差分曲率估计，直接进入 EKF R。
   bool valid = false;
   ReliableYawStatus status = ReliableYawStatus::InvalidInput;
   double inward_yaw_T_rad = 0.0;
@@ -33,9 +35,9 @@ struct ReliableYaw {
   double facing_cosine = 0.0;
 };
 
-// Estimates the horizontal inward armor normal with an upright-armor
-// constraint. It intentionally never reads PoseResult::rvec_rad or
-// PoseResult::rotation_camera_from_armor.
+// 以“装甲板竖直”约束，从四个角点独立估计 T 系水平 inward yaw。
+// 故意不读取 PoseResult::rvec_rad 或 rotation_camera_from_armor，以规避
+// IPPE 平面姿态的 yaw 翻转和不稳定性。
 class ConstrainedYawSolver {
  public:
   explicit ConstrainedYawSolver(CameraCalibration calibration,

@@ -42,6 +42,7 @@ State predictState(const State& state, double dt_s) {
   if (!finite(dt_s) || dt_s < 0.0) {
     throw std::invalid_argument("prediction dt must be finite and non-negative");
   }
+  // 仅积分平动速度和自转角速度；半径与高差作为慢变几何保留。
   State predicted = state;
   predicted.x[CenterX] += predicted.x[VelocityX] * dt_s;
   predicted.x[CenterY] += predicted.x[VelocityY] * dt_s;
@@ -52,6 +53,7 @@ State predictState(const State& state, double dt_s) {
 
 Measurement observe(const State& state, int armor_slot) {
   if (!validSlot(armor_slot)) throw std::out_of_range("invalid armor slot");
+  // 偶/奇槽位允许不同半径和高度；相邻物理槽位固定相差 90 度。
   const double parity = static_cast<double>(armor_slot % 2);
   const double phi = state.x[Theta] + armor_slot * (kPi * 0.5);
   const double radius = state.x[RadiusEven] + parity * state.x[RadiusOddDelta];
@@ -153,6 +155,7 @@ const State& WholeVehicleEkf::state() const noexcept { return state_; }
 
 Matrix11 WholeVehicleEkf::processNoise(double dt_s) const {
   Matrix11 noise = Matrix11::Zero();
+  // 连续白噪声加速度离散化：q * [[dt^3/3, dt^2/2], [dt^2/2, dt]]。
   const auto addConstantVelocityNoise = [&](int position, int velocity,
                                             double spectral_density) {
     noise(position, position) = spectral_density * dt_s * dt_s * dt_s / 3.0;
@@ -172,6 +175,7 @@ Matrix11 WholeVehicleEkf::processNoise(double dt_s) const {
 
 Matrix4 WholeVehicleEkf::measurementCovariance(
     const Measurement& measurement) const {
+  // 低置信度、差关键点、差视角、大重投影 RMS 或远距离都会降低本帧权重。
   const double confidence = std::max(options_.minimum_quality, measurement.confidence);
   const double keypoint_quality =
       std::max(options_.minimum_quality, measurement.keypoint_quality);
@@ -204,6 +208,7 @@ bool WholeVehicleEkf::identityConsistent(const Measurement& measurement) const {
 
 std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
     const std::vector<Measurement>& measurements) const {
+  // number/color 只做车辆身份门控。实际 E0-E3 槽位由几何预测和 NIS 决定。
   std::optional<Association> best;
   for (std::size_t measurement_index = 0; measurement_index < measurements.size();
        ++measurement_index) {
@@ -214,11 +219,13 @@ std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
       const Measurement predicted = observe(state_, armor_slot);
       const Jacobian h = observationJacobian(state_, armor_slot);
       if (measurement.has_inward_yaw) {
+        // yaw 残差必须环绕到 [-pi, pi)，否则跨 +/-pi 会被误判为大跳变。
         Vector4 innovation;
         innovation.template head<3>() = measurement.position_T_m - predicted.position_T_m;
         innovation[3] = wrapToPi(measurement.inward_yaw_T_rad -
                                   predicted.inward_yaw_T_rad);
         const Matrix4 innovation_covariance = h * state_.covariance * h.transpose() + covariance;
+        // NIS = y^T S^-1 y，LDLT 求解避免形成 S 的显式逆。
         Eigen::LDLT<Matrix4> ldlt(innovation_covariance);
         if (ldlt.info() != Eigen::Success) continue;
         const Vector4 solution = ldlt.solve(innovation);
@@ -265,6 +272,7 @@ bool WholeVehicleEkf::applyUpdate(const Measurement& measurement,
         h * state_.covariance * h.transpose() + association.covariance;
     Eigen::LDLT<Matrix4> ldlt(innovation_covariance);
     if (ldlt.info() != Eigen::Success) return false;
+    // K=P*H^T*S^-1；求解 S*(H*P) 后转置得到 K。
     const Eigen::Matrix<double, 4, kWholeVehicleStateDimension> solved =
         ldlt.solve(h * state_.covariance);
     if (!solved.allFinite()) return false;
@@ -272,6 +280,7 @@ bool WholeVehicleEkf::applyUpdate(const Measurement& measurement,
         solved.transpose();
     state_.x += gain * innovation;
     const Matrix11 residual = identity - gain * h;
+    // Joseph 形式在浮点误差下仍能维持协方差半正定。
     state_.covariance = residual * state_.covariance * residual.transpose() +
                         gain * association.covariance * gain.transpose();
   } else {
@@ -300,6 +309,7 @@ bool WholeVehicleEkf::applyUpdate(const Measurement& measurement,
 
 bool WholeVehicleEkf::initialize(const Measurement& measurement) {
   if (!validMeasurement(measurement) || !measurement.has_inward_yaw) return false;
+  // 单块板不能同时解出中心和半径：将该板定义为 E0，并使用 r0 先验反推中心。
   state_ = State{};
   state_.x[Theta] = measurement.inward_yaw_T_rad;
   state_.x[RadiusEven] = options_.radius_prior_m;
@@ -378,6 +388,7 @@ TrackOutput WholeVehicleEkf::update(
     }
   }
 
+  // 未初始化时只接受可靠 yaw；position-only 量测不会凭空确定整车朝向。
   if (!has_state_) {
     for (const Measurement& measurement : measurements) {
       if (initialize(measurement)) return makeOutput(timestamp_ns, 0, 0.0);
@@ -399,6 +410,7 @@ TrackOutput WholeVehicleEkf::update(
     return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
   }
 
+  // dt 必须来自相邻曝光时间，不能使用处理耗时或固定 FPS。
   Matrix11 transition = Matrix11::Identity();
   transition(CenterX, VelocityX) = dt_s;
   transition(CenterY, VelocityY) = dt_s;
@@ -415,6 +427,7 @@ TrackOutput WholeVehicleEkf::update(
     return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
   }
 
+  // 所有候选失败时保持预测状态，由 TemporarilyLost 让 Q 扩大不确定性。
   const std::optional<Association> association = associate(measurements);
   if (association && applyUpdate(measurements[association->measurement_index], *association)) {
     const Measurement& measurement = measurements[association->measurement_index];

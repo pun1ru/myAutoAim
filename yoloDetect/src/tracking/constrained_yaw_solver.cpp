@@ -54,6 +54,7 @@ ProjectionEvaluation evaluateYaw(
     const cv::Vec3d& center_camera_m,
     const std::array<cv::Point2f, kArmorPointCount>& image_points) {
   ProjectionEvaluation evaluation;
+  // 候选 yaw 先构成 T-from-A，再用同曝光 R_TC 转到 OpenCV 相机系投影。
   const cv::Matx33d rotation_camera_from_tracker =
       rotation_tracker_from_camera.t();
   evaluation.rotation_camera_from_armor =
@@ -132,11 +133,13 @@ ReliableYaw ConstrainedYawSolver::solve(
     return result;
   }
 
+  // 相机朝向取自图像曝光瞬间，不能取检测处理完成时刻的云台姿态。
   const cv::Matx33d rotation_tracker_from_camera =
       coordinates::cameraRotationOdom(exposure_snapshot);
   double best_yaw = 0.0;
   ProjectionEvaluation best;
   const double step = 2.0 * kPi / options_.coarse_search_steps;
+  // 先全局扫描，避免从 IPPE 姿态或局部初值继承平面解的错误分支。
   for (int index = 0; index < options_.coarse_search_steps; ++index) {
     const double yaw = -kPi + step * index;
     const ProjectionEvaluation candidate = evaluateYaw(
@@ -149,7 +152,7 @@ ReliableYaw ConstrainedYawSolver::solve(
   }
   if (!finite(best.squared_error_px)) return result;
 
-  // A bounded golden-section search keeps the yaw result independent of IPPE.
+  // 在最佳网格附近做有界黄金分割，保持 yaw 求解独立于 IPPE。
   double lower = best_yaw - step;
   double upper = best_yaw + step;
   constexpr double kGolden = 0.6180339887498948482;
@@ -197,6 +200,7 @@ ReliableYaw ConstrainedYawSolver::solve(
     return result;
   }
 
+  // 通过误差曲率估计单板 yaw 可观测性；曲率过小意味着 yaw 不可信。
   const double finite_difference_rad = 0.005;
   const double left_error = evaluateYaw(
       best_yaw - finite_difference_rad, rotation_tracker_from_camera,
@@ -219,6 +223,7 @@ ReliableYaw ConstrainedYawSolver::solve(
     return result;
   }
 
+  // 与相差 pi 的反向法线比较，拒绝两种朝向几乎等价的平面退化情况。
   const ProjectionEvaluation opposite = evaluateYaw(
       best_yaw + kPi, rotation_tracker_from_camera, calibration_, pose.armor_size,
       refined_center_camera_m, image_points);

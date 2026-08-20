@@ -20,6 +20,7 @@ std::optional<Measurement> makeTrackerMeasurement(
     const PoseResult& pose, const ArmorDetection& detection,
     const ConstrainedYawSolver& yaw_solver, ReliableYaw* reliable_yaw) {
   if (reliable_yaw != nullptr) *reliable_yaw = ReliableYaw{};
+  // 量测、图像和坐标姿态必须是同一曝光，任意序列号/时间戳不一致均拒绝。
   if (frame.source_sequence == 0 || frame.capture_timestamp_ns == 0 ||
       !exposure_snapshot.valid ||
       exposure_snapshot.frame_sequence != frame.source_sequence ||
@@ -30,6 +31,7 @@ std::optional<Measurement> makeTrackerMeasurement(
   }
   Measurement measurement;
   measurement.timestamp_ns = frame.capture_timestamp_ns;
+  // PnP tvec/center 已统一为米；相机到 T 的变换只使用 exposure_snapshot。
   const cv::Vec3d tracker_position = coordinates::cameraPointToTracker(
       exposure_snapshot, pose.center_camera_m);
   measurement.position_T_m = Eigen::Vector3d(
@@ -45,6 +47,7 @@ std::optional<Measurement> makeTrackerMeasurement(
   measurement.keypoint_quality = *std::min_element(
       detection.keypoint_confidences.begin(), detection.keypoint_confidences.end());
   measurement.view_quality = 1.0;
+  // 约束重投影 yaw 独立于 IPPE rvec；失败时保留 position-only 观测。
   const ReliableYaw yaw = yaw_solver.solve(exposure_snapshot, pose,
                                            detection.keypoints);
   if (reliable_yaw != nullptr) *reliable_yaw = yaw;

@@ -9,11 +9,13 @@
 
 namespace yolo_detect::tracking {
 
+// 固定维度用于避免运行时动态分配；所有位置使用 T 系米，角度使用 rad。
 inline constexpr int kWholeVehicleStateDimension = 11;
 inline constexpr int kArmorObservationDimension = 4;
 inline constexpr int kArmorSlotCount = 4;
 
 enum StateIndex : int {
+  // 状态排列为 [cx,vx, cy,vy, cz,vz, theta,omega, r0,dr,dz]。
   CenterX = 0,
   VelocityX = 1,
   CenterY = 2,
@@ -36,9 +38,8 @@ using Matrix4 = Eigen::Matrix<double, kArmorObservationDimension,
 using Jacobian = Eigen::Matrix<double, kArmorObservationDimension,
                                kWholeVehicleStateDimension>;
 
-// A single PnP-derived armor observation expressed in the tracker frame T.
-// `has_inward_yaw` remains false until an independent constrained-reprojection
-// yaw estimator is available; PnP Rodrigues components are never used here.
+// 单块装甲板在本次曝光时刻的量测。position_T_m 由 PnP 平移和同曝光
+// 坐标快照转换而来；yaw 必须来自独立约束重投影，不能使用 PnP rvec。
 struct Measurement {
   std::uint64_t timestamp_ns = 0;
   Eigen::Vector3d position_T_m = Eigen::Vector3d::Zero();
@@ -59,23 +60,25 @@ struct Measurement {
 };
 
 struct State {
+  // x 是连续 theta 的内部状态，不在每帧 wrap；covariance 与 x 一一对应。
   Vector11 x = Vector11::Zero();
   Matrix11 covariance = Matrix11::Identity();
 };
 
 struct DecodedArmor {
+  // 由整车状态解码出的物理槽位，而不是网络的 number_id。
   int armor_slot = -1;
   Eigen::Vector3d position_T_m = Eigen::Vector3d::Zero();
   double inward_yaw_T_rad = 0.0;
 };
 
-// Advances the mean state with constant linear and angular velocity.
+// 纯函数：按匀速、匀角速度模型预测均值，不修改协方差。
 [[nodiscard]] State predictState(const State& state, double dt_s);
-// Returns the 4D [position_T, inward_yaw_T] observation of one physical slot.
+// 纯函数：返回指定物理槽位的 h(x,i)=[x,y,z,inward_yaw]。
 [[nodiscard]] Measurement observe(const State& state, int armor_slot);
-// Analytic derivative of observe(state, armor_slot) with respect to state.x.
+// h(x,i) 对 11 维状态的解析 Jacobian，供关联和 EKF 更新共用。
 [[nodiscard]] Jacobian observationJacobian(const State& state, int armor_slot);
-// Decodes one future physical armor position without wrapping theta.
+// 将状态预测 horizon_s 后解码一个物理装甲板；theta 仍保持连续。
 [[nodiscard]] DecodedArmor decodeArmor(const State& state, int armor_slot,
                                         double horizon_s);
 [[nodiscard]] double wrapToPi(double angle_rad) noexcept;
@@ -89,19 +92,24 @@ enum class TrackingState {
 };
 
 struct WholeVehicleEkfOptions {
+  // 几何先验：首次只看到一块板时，中心只能由该半径反推。
   double radius_prior_m = 0.26;
   double minimum_radius_m = 0.02;
+  // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
   double q_linear_acceleration = 4.0;
   double q_angular_acceleration = 16.0;
   double q_geometry = 1e-4;
+  // 基础观测标准差。R 会再按质量、重投影 RMS 和相机量测距离放大。
   double position_std_xy_m = 0.03;
   double position_std_z_m = 0.08;
   double yaw_std_rad = 0.12;
   double reprojection_rms_scale = 0.15;
   double range_noise_scale_per_m = 0.025;
   double minimum_quality = 0.05;
+  // 3D/4D 卡方 NIS 门限，默认分别接近 95% 分位。
   double nis_gate_3d = 7.815;
   double nis_gate_4d = 9.488;
+  // 状态机确认、丢失和时间跳变策略。
   int confirming_hits = 3;
   int lost_frame_limit = 10;
   double lost_time_limit_s = 0.5;
@@ -114,6 +122,7 @@ struct WholeVehicleEkfOptions {
 };
 
 struct TrackOutput {
+  // 每帧的完整快照，既供黄点投影，也供网页/API 输出。
   std::uint64_t timestamp_ns = 0;
   TrackingState tracking_state = TrackingState::Uninitialized;
   bool has_state = false;
@@ -136,6 +145,7 @@ class WholeVehicleEkf {
  public:
   explicit WholeVehicleEkf(WholeVehicleEkfOptions options = {});
 
+  // 一次调用严格对应一个 capture_timestamp_ns：先 predict，再关联并更新。
   [[nodiscard]] TrackOutput update(
       std::uint64_t timestamp_ns, const std::vector<Measurement>& measurements);
   void reset() noexcept;
@@ -147,6 +157,7 @@ class WholeVehicleEkf {
 
  private:
   struct Association {
+    // 本帧被接受的“检测量测 <-> 物理槽位”组合。
     int measurement_index = -1;
     int armor_slot = -1;
     double nis = 0.0;
@@ -154,6 +165,7 @@ class WholeVehicleEkf {
     Matrix4 covariance = Matrix4::Zero();
   };
 
+  // Q、R、身份门控、关联、Joseph 更新和初始化均保持为私有步骤。
   [[nodiscard]] Matrix11 processNoise(double dt_s) const;
   [[nodiscard]] Matrix4 measurementCovariance(
       const Measurement& measurement) const;
