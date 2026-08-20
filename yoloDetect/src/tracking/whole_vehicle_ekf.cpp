@@ -228,11 +228,14 @@ Matrix4 WholeVehicleEkf::measurementCovariance(
 }
 
 bool WholeVehicleEkf::identityConsistent(const Measurement& measurement) const {
-  const bool color_consistent = tracked_color_id_ < 0 || measurement.color_id < 0 ||
-                                tracked_color_id_ == measurement.color_id;
-  const bool number_consistent = tracked_number_id_ < 0 || measurement.number_id < 0 ||
-                                 tracked_number_id_ == measurement.number_id;
-  return color_consistent && number_consistent;
+  // The number classifier is the stronger target identity. Color classifiers
+  // can disagree between two faces of the same vehicle, so only use color as
+  // the fallback identity when either number is unavailable.
+  if (tracked_number_id_ >= 0 && measurement.number_id >= 0) {
+    return tracked_number_id_ == measurement.number_id;
+  }
+  return tracked_color_id_ < 0 || measurement.color_id < 0 ||
+         tracked_color_id_ == measurement.color_id;
 }
 
 std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(

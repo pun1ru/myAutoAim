@@ -174,14 +174,18 @@ void testTwoVisibleArmorsUpdateOneFrame() {
   truth.x[tracking::VelocityZ] = 0.0;
   truth.x[tracking::Omega] = 0.0;
   const std::uint64_t timestamp_ns = 2'500'000'000ULL;
+  tracking::Measurement second = observationAt(truth, 1, timestamp_ns);
+  second.color_id = 2;  // Simulate an inconsistent color classification.
   const tracking::TrackOutput output = ekf.update(
       timestamp_ns, {observationAt(truth, 0, timestamp_ns),
-                     observationAt(truth, 1, timestamp_ns)});
+                     second});
   require(output.associated_observations.size() == 2,
           "two visible armors must both update the same EKF frame");
   require(output.associated_observations[0].armor_slot == 0 &&
               output.associated_observations[1].armor_slot == 1,
           "one-to-one association must keep the two physical armor slots distinct");
+  require(output.associated_observations[1].measurement_index == 1,
+          "matching number IDs must allow a second armor despite color disagreement");
   require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
               std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
           "the second armor observation must reduce radius-prior error");
