@@ -594,7 +594,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const SceneState& scene_state,
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const std::vector<yolo_detect::tracking::ReliableYaw>& reliable_yaws,
-    std::size_t tracker_observation_count) {
+    const std::vector<yolo_detect::tracking::Measurement>& tracker_measurements) {
   yolo_detect::WebFrameTelemetry telemetry;
   telemetry.source_sequence = source_sequence;
   telemetry.scene = scene_state.scene;
@@ -604,7 +604,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   telemetry.tracker_state = yolo_detect::tracking::trackingStateName(
       tracker_output.tracking_state);
   telemetry.tracker_has_state = tracker_output.has_state;
-  telemetry.tracker_observation_count = tracker_observation_count;
+  telemetry.tracker_observation_count = tracker_measurements.size();
   telemetry.reliable_yaw_count = static_cast<std::size_t>(std::count_if(
       reliable_yaws.begin(), reliable_yaws.end(),
       [](const yolo_detect::tracking::ReliableYaw& yaw) { return yaw.valid; }));
@@ -617,6 +617,27 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     telemetry.tracker_yaw_rms_px = yaw.reprojection_rms_px;
   }
   if (tracker_output.has_state) {
+    telemetry.tracker_center_x_T_m = tracker_output.center_T_m.x();
+    telemetry.tracker_center_y_T_m = tracker_output.center_T_m.y();
+    telemetry.tracker_center_z_T_m = tracker_output.center_T_m.z();
+    telemetry.tracker_velocity_x_T_mps = tracker_output.velocity_T_mps.x();
+    telemetry.tracker_velocity_y_T_mps = tracker_output.velocity_T_mps.y();
+    telemetry.tracker_velocity_z_T_mps = tracker_output.velocity_T_mps.z();
+    telemetry.tracker_theta_rad = tracker_output.theta_rad;
+    telemetry.tracker_omega_rad_s = tracker_output.omega_rad_s;
+    telemetry.tracker_radius_even_m = tracker_output.radius_even_m;
+    telemetry.tracker_radius_odd_delta_m = tracker_output.radius_odd_delta_m;
+    telemetry.tracker_height_odd_delta_m = tracker_output.height_odd_delta_m;
+    telemetry.tracker_consecutive_hits = tracker_output.consecutive_hits;
+    telemetry.tracker_consecutive_misses = tracker_output.consecutive_misses;
+    if (tracker_output.associated_slot) {
+      telemetry.tracker_association_valid = true;
+      telemetry.tracker_associated_slot = *tracker_output.associated_slot;
+    }
+    if (tracker_output.nis && std::isfinite(*tracker_output.nis)) {
+      telemetry.tracker_nis_valid = true;
+      telemetry.tracker_nis = *tracker_output.nis;
+    }
     telemetry.predicted_armors.reserve(tracker_output.predicted_armors.size());
     for (const yolo_detect::tracking::DecodedArmor& armor :
          tracker_output.predicted_armors) {
@@ -625,6 +646,39 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
       telemetry.predicted_armors.push_back(
           {armor.armor_slot, position.x(), position.y(), position.z()});
     }
+  }
+  telemetry.tracker_measurements.reserve(tracker_measurements.size());
+  for (std::size_t measurement_index = 0;
+       measurement_index < tracker_measurements.size(); ++measurement_index) {
+    const yolo_detect::tracking::Measurement& measurement =
+        tracker_measurements[measurement_index];
+    const auto association = std::find_if(
+        tracker_output.associated_observations.begin(),
+        tracker_output.associated_observations.end(),
+        [measurement_index](const yolo_detect::tracking::AssociatedObservation& item) {
+          return item.measurement_index == static_cast<int>(measurement_index);
+        });
+    const bool associated = association !=
+                            tracker_output.associated_observations.end();
+    telemetry.tracker_measurements.push_back(
+        {measurement.timestamp_ns,
+         measurement.position_T_m.x(), measurement.position_T_m.y(),
+         measurement.position_T_m.z(), measurement.camera_range_m,
+         measurement.has_inward_yaw, measurement.inward_yaw_T_rad,
+         measurement.yaw_std_rad, measurement.reprojection_rms_px,
+         measurement.confidence, measurement.keypoint_quality,
+         measurement.view_quality, measurement.color_id, measurement.number_id,
+         associated, associated ? association->armor_slot : -1,
+         associated ? association->nis : 0.0,
+         associated ? association->predicted_position_T_m.x() : 0.0,
+         associated ? association->predicted_position_T_m.y() : 0.0,
+         associated ? association->predicted_position_T_m.z() : 0.0,
+         associated ? association->position_innovation_T_m.x() : 0.0,
+         associated ? association->position_innovation_T_m.y() : 0.0,
+         associated ? association->position_innovation_T_m.z() : 0.0,
+         associated ? association->radial_innovation_m : 0.0,
+         associated ? association->predicted_inward_yaw_T_rad : 0.0,
+         associated ? association->yaw_innovation_rad : 0.0});
   }
   telemetry.coordinate_valid = coordinate_snapshot.valid;
   telemetry.coordinate_status = coordinate_message;
@@ -1284,7 +1338,7 @@ int main(int argc, char** argv) {
             makeWebTelemetry(header.source_sequence, poses, detection_aims,
                              coordinate_snapshot, coordinate_message,
                              gimbal_control, scene_state, tracker_output,
-                             reliable_yaws, tracker_measurements.size()));
+                             reliable_yaws, tracker_measurements));
       }
 
       if (!options.record_path.empty()) {

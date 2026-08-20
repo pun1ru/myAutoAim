@@ -56,6 +56,36 @@ struct WebPredictedArmorTelemetry {
   double z_T_m = 0.0;
 };
 
+// Mirrors one tracker Measurement before data association and EKF update.
+struct WebTrackerMeasurementTelemetry {
+  std::uint64_t timestamp_ns = 0;
+  double x_T_m = 0.0;
+  double y_T_m = 0.0;
+  double z_T_m = 0.0;
+  double camera_range_m = 0.0;
+  bool has_inward_yaw = false;
+  double inward_yaw_rad = 0.0;
+  double yaw_std_rad = 0.0;
+  double reprojection_rms_px = 0.0;
+  double confidence = 0.0;
+  double keypoint_quality = 0.0;
+  double view_quality = 0.0;
+  int color_id = -1;
+  int number_id = -1;
+  bool association_valid = false;
+  int associated_slot = -1;
+  double nis = 0.0;
+  double predicted_x_T_m = 0.0;
+  double predicted_y_T_m = 0.0;
+  double predicted_z_T_m = 0.0;
+  double innovation_x_T_m = 0.0;
+  double innovation_y_T_m = 0.0;
+  double innovation_z_T_m = 0.0;
+  double radial_innovation_m = 0.0;
+  double predicted_yaw_rad = 0.0;
+  double yaw_innovation_rad = 0.0;
+};
+
 struct WebFrameTelemetry {
   std::uint64_t source_sequence = 0;
   std::string scene;
@@ -69,6 +99,23 @@ struct WebFrameTelemetry {
   std::string tracker_yaw_status = "no armor observations";
   bool tracker_yaw_diagnostic_valid = false;
   double tracker_yaw_rms_px = 0.0;
+  double tracker_center_x_T_m = 0.0;
+  double tracker_center_y_T_m = 0.0;
+  double tracker_center_z_T_m = 0.0;
+  double tracker_velocity_x_T_mps = 0.0;
+  double tracker_velocity_y_T_mps = 0.0;
+  double tracker_velocity_z_T_mps = 0.0;
+  double tracker_theta_rad = 0.0;
+  double tracker_omega_rad_s = 0.0;
+  double tracker_radius_even_m = 0.0;
+  double tracker_radius_odd_delta_m = 0.0;
+  double tracker_height_odd_delta_m = 0.0;
+  bool tracker_association_valid = false;
+  int tracker_associated_slot = -1;
+  bool tracker_nis_valid = false;
+  double tracker_nis = 0.0;
+  int tracker_consecutive_hits = 0;
+  int tracker_consecutive_misses = 0;
   bool coordinate_valid = false;
   std::string coordinate_status;
   double camera_position_error_m = 0.0;
@@ -84,6 +131,7 @@ struct WebFrameTelemetry {
   std::uint64_t last_gimbal_command_id = 0;
   bool last_command_fired = false;
   std::vector<WebPredictedArmorTelemetry> predicted_armors;
+  std::vector<WebTrackerMeasurementTelemetry> tracker_measurements;
   std::vector<WebPoseTelemetry> poses;
 };
 

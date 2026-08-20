@@ -154,6 +154,24 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
+<section aria-labelledby="ekf-state-title">
+  <div class="pose-heading"><h2 id="ekf-state-title">EKF State (T)</h2></div>
+  <div class="pose-table-wrap">
+    <table>
+      <thead><tr><th>C X m</th><th>C Y m</th><th>C Z m</th><th>V X m/s</th><th>V Y m/s</th><th>V Z m/s</th><th>Theta deg</th><th>Omega deg/s</th><th>r0 m</th><th>dr m</th><th>dz m</th><th>Slot</th><th>NIS</th><th>Hits</th><th>Misses</th></tr></thead>
+      <tbody id="ekf-state-rows"><tr><td colspan="15">No active EKF state</td></tr></tbody>
+    </table>
+  </div>
+</section>
+<section aria-labelledby="ekf-observation-title">
+  <div class="pose-heading"><h2 id="ekf-observation-title">EKF Measurements and Association (T)</h2></div>
+  <div class="pose-table-wrap">
+    <table>
+      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Inward yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
+      <tbody id="ekf-observation-rows"><tr><td colspan="24">No EKF measurements</td></tr></tbody>
+    </table>
+  </div>
+</section>
 <section class="control-panel" aria-label="Simulator controls">
   <div class="control-row"><span class="control-label">Scene</span><button class="scene" data-action="scene-shooting-range">Shooting Range</button><button class="scene" data-action="scene-energy">Energy</button><button data-action="reset">Reset Scene</button></div>
   <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
@@ -199,6 +217,8 @@ spinSpeedApply.addEventListener('click', () => {
 
 const poseRows = document.getElementById('pose-rows');
 const ekfRows = document.getElementById('ekf-rows');
+const ekfStateRows = document.getElementById('ekf-state-rows');
+const ekfObservationRows = document.getElementById('ekf-observation-rows');
 const poseFrame = document.getElementById('pose-frame');
 const coordinateState = document.getElementById('coordinate-state');
 const trackerState = document.getElementById('tracker-state');
@@ -293,6 +313,73 @@ async function refreshPose() {
       predictedRows.push(row);
     }
     ekfRows.replaceChildren(...predictedRows);
+    const stateRows = [];
+    if (state.tracker_has_state) {
+      const row = document.createElement('tr');
+      row.className = 'valid';
+      row.append(cell(metric(state.tracker_center_x_T_m, 3)));
+      row.append(cell(metric(state.tracker_center_y_T_m, 3)));
+      row.append(cell(metric(state.tracker_center_z_T_m, 3)));
+      row.append(cell(metric(state.tracker_velocity_x_T_mps, 3)));
+      row.append(cell(metric(state.tracker_velocity_y_T_mps, 3)));
+      row.append(cell(metric(state.tracker_velocity_z_T_mps, 3)));
+      row.append(cell(metric(state.tracker_theta_rad * 180 / Math.PI, 2)));
+      row.append(cell(metric(state.tracker_omega_rad_s * 180 / Math.PI, 2)));
+      row.append(cell(metric(state.tracker_radius_even_m, 3)));
+      row.append(cell(metric(state.tracker_radius_odd_delta_m, 3)));
+      row.append(cell(metric(state.tracker_height_odd_delta_m, 3)));
+      row.append(cell(state.tracker_association_valid ? 'E' + state.tracker_associated_slot : '-'));
+      row.append(cell(state.tracker_nis_valid ? metric(state.tracker_nis, 3) : '-'));
+      row.append(cell(String(state.tracker_consecutive_hits)));
+      row.append(cell(String(state.tracker_consecutive_misses)));
+      stateRows.push(row);
+    } else {
+      const row = document.createElement('tr');
+      const empty = cell('No active EKF state');
+      empty.colSpan = 15;
+      row.append(empty);
+      stateRows.push(row);
+    }
+    ekfStateRows.replaceChildren(...stateRows);
+    const observationRows = [];
+    for (const [index, observation] of (state.tracker_measurements || []).entries()) {
+      const row = document.createElement('tr');
+      row.className = observation.has_inward_yaw ? 'valid' : 'warning';
+      row.append(cell('#' + (index + 1)));
+      row.append(cell(metric(observation.x_T_m, 3)));
+      row.append(cell(metric(observation.y_T_m, 3)));
+      row.append(cell(metric(observation.z_T_m, 3)));
+      row.append(cell(metric(observation.camera_range_m, 3)));
+      row.append(cell(observation.has_inward_yaw ? 'yes' : 'no'));
+      row.append(cell(observation.has_inward_yaw ? metric(observation.inward_yaw_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(observation.has_inward_yaw ? metric(observation.yaw_std_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(metric(observation.reprojection_rms_px, 2)));
+      row.append(cell(metric(observation.confidence, 3)));
+      row.append(cell(metric(observation.keypoint_quality, 3)));
+      row.append(cell(metric(observation.view_quality, 3)));
+      row.append(cell(String(observation.color_id)));
+      row.append(cell(String(observation.number_id)));
+      row.append(cell(observation.association_valid ? 'E' + observation.associated_slot : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.nis, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.predicted_x_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.predicted_y_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.predicted_z_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.innovation_x_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.innovation_y_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.innovation_z_T_m, 3) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.radial_innovation_m, 3) : '-'));
+      row.append(cell(observation.association_valid && observation.has_inward_yaw
+        ? metric(observation.yaw_innovation_rad * 180 / Math.PI, 2) : '-'));
+      observationRows.push(row);
+    }
+    if (observationRows.length === 0) {
+      const row = document.createElement('tr');
+      const empty = cell('No EKF measurements');
+      empty.colSpan = 24;
+      row.append(empty);
+      observationRows.push(row);
+    }
+    ekfObservationRows.replaceChildren(...observationRows);
   } catch (_) {
   }
 }
@@ -378,6 +465,54 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
   } else {
     stream << ",\"tracker_yaw_rms_px\":null";
   }
+  if (telemetry.tracker_has_state) {
+    stream << ",\"tracker_center_x_T_m\":" << telemetry.tracker_center_x_T_m
+           << ",\"tracker_center_y_T_m\":" << telemetry.tracker_center_y_T_m
+           << ",\"tracker_center_z_T_m\":" << telemetry.tracker_center_z_T_m
+           << ",\"tracker_velocity_x_T_mps\":"
+           << telemetry.tracker_velocity_x_T_mps
+           << ",\"tracker_velocity_y_T_mps\":"
+           << telemetry.tracker_velocity_y_T_mps
+           << ",\"tracker_velocity_z_T_mps\":"
+           << telemetry.tracker_velocity_z_T_mps
+           << ",\"tracker_theta_rad\":" << telemetry.tracker_theta_rad
+           << ",\"tracker_omega_rad_s\":" << telemetry.tracker_omega_rad_s
+           << ",\"tracker_radius_even_m\":"
+           << telemetry.tracker_radius_even_m
+           << ",\"tracker_radius_odd_delta_m\":"
+           << telemetry.tracker_radius_odd_delta_m
+           << ",\"tracker_height_odd_delta_m\":"
+           << telemetry.tracker_height_odd_delta_m
+           << ",\"tracker_consecutive_hits\":"
+           << telemetry.tracker_consecutive_hits
+           << ",\"tracker_consecutive_misses\":"
+           << telemetry.tracker_consecutive_misses;
+  } else {
+    stream << ",\"tracker_center_x_T_m\":null,"
+              "\"tracker_center_y_T_m\":null,"
+              "\"tracker_center_z_T_m\":null,"
+              "\"tracker_velocity_x_T_mps\":null,"
+              "\"tracker_velocity_y_T_mps\":null,"
+              "\"tracker_velocity_z_T_mps\":null,"
+              "\"tracker_theta_rad\":null,"
+              "\"tracker_omega_rad_s\":null,"
+              "\"tracker_radius_even_m\":null,"
+              "\"tracker_radius_odd_delta_m\":null,"
+              "\"tracker_height_odd_delta_m\":null,"
+              "\"tracker_consecutive_hits\":0,"
+              "\"tracker_consecutive_misses\":0";
+  }
+  if (telemetry.tracker_association_valid) {
+    stream << ",\"tracker_associated_slot\":"
+           << telemetry.tracker_associated_slot;
+  } else {
+    stream << ",\"tracker_associated_slot\":null";
+  }
+  if (telemetry.tracker_nis_valid && std::isfinite(telemetry.tracker_nis)) {
+    stream << ",\"tracker_nis\":" << telemetry.tracker_nis;
+  } else {
+    stream << ",\"tracker_nis\":null";
+  }
   stream
          << ",\"coordinate_valid\":"
          << (coordinate_metrics_valid ? "true" : "false")
@@ -427,6 +562,43 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << ",\"x_T_m\":" << armor.x_T_m
            << ",\"y_T_m\":" << armor.y_T_m
            << ",\"z_T_m\":" << armor.z_T_m << '}';
+  }
+  stream << "],\"tracker_measurements\":[";
+  for (std::size_t index = 0; index < telemetry.tracker_measurements.size();
+       ++index) {
+    if (index != 0) stream << ',';
+    const WebTrackerMeasurementTelemetry& measurement =
+        telemetry.tracker_measurements[index];
+    stream << "{\"timestamp_ns\":" << measurement.timestamp_ns
+           << ",\"x_T_m\":" << measurement.x_T_m
+           << ",\"y_T_m\":" << measurement.y_T_m
+           << ",\"z_T_m\":" << measurement.z_T_m
+           << ",\"camera_range_m\":" << measurement.camera_range_m
+           << ",\"has_inward_yaw\":"
+           << (measurement.has_inward_yaw ? "true" : "false")
+           << ",\"inward_yaw_rad\":" << measurement.inward_yaw_rad
+           << ",\"yaw_std_rad\":" << measurement.yaw_std_rad
+           << ",\"reprojection_rms_px\":"
+           << measurement.reprojection_rms_px
+           << ",\"confidence\":" << measurement.confidence
+           << ",\"keypoint_quality\":" << measurement.keypoint_quality
+           << ",\"view_quality\":" << measurement.view_quality
+           << ",\"color_id\":" << measurement.color_id
+           << ",\"number_id\":" << measurement.number_id
+           << ",\"association_valid\":"
+           << (measurement.association_valid ? "true" : "false")
+           << ",\"associated_slot\":" << measurement.associated_slot
+           << ",\"nis\":" << measurement.nis
+           << ",\"predicted_x_T_m\":" << measurement.predicted_x_T_m
+           << ",\"predicted_y_T_m\":" << measurement.predicted_y_T_m
+           << ",\"predicted_z_T_m\":" << measurement.predicted_z_T_m
+           << ",\"innovation_x_T_m\":" << measurement.innovation_x_T_m
+           << ",\"innovation_y_T_m\":" << measurement.innovation_y_T_m
+           << ",\"innovation_z_T_m\":" << measurement.innovation_z_T_m
+           << ",\"radial_innovation_m\":" << measurement.radial_innovation_m
+           << ",\"predicted_yaw_rad\":" << measurement.predicted_yaw_rad
+           << ",\"yaw_innovation_rad\":" << measurement.yaw_innovation_rad
+           << '}';
   }
   stream << "],\"poses\":[";
   for (std::size_t index = 0; index < telemetry.poses.size(); ++index) {

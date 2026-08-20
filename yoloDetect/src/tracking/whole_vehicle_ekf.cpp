@@ -8,6 +8,8 @@
 #include <stdexcept>
 
 namespace yolo_detect::tracking {
+double wrapToPi(double angle_rad) noexcept;
+
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -28,6 +30,33 @@ bool validMeasurement(const Measurement& measurement) {
 }
 
 double square(double value) { return value * value; }
+
+AssociatedObservation makeAssociatedObservation(
+    const State& state, const Measurement& measurement,
+    int measurement_index, int armor_slot, double nis, bool includes_yaw) {
+  const Measurement predicted = observe(state, armor_slot);
+  AssociatedObservation output;
+  output.measurement_index = measurement_index;
+  output.armor_slot = armor_slot;
+  output.nis = nis;
+  output.includes_yaw = includes_yaw;
+  output.predicted_position_T_m = predicted.position_T_m;
+  output.position_innovation_T_m =
+      measurement.position_T_m - predicted.position_T_m;
+  output.predicted_inward_yaw_T_rad = predicted.inward_yaw_T_rad;
+  if (includes_yaw) {
+    output.yaw_innovation_rad = wrapToPi(
+        measurement.inward_yaw_T_rad - predicted.inward_yaw_T_rad);
+  }
+  const Eigen::Vector3d center(state.x[CenterX], state.x[CenterY],
+                               state.x[CenterZ]);
+  const Eigen::Vector3d toward_center = center - predicted.position_T_m;
+  if (toward_center.squaredNorm() > 1e-12) {
+    output.radial_innovation_m = output.position_innovation_T_m.dot(
+        toward_center.normalized());
+  }
+  return output;
+}
 
 }  // namespace
 
@@ -207,15 +236,22 @@ bool WholeVehicleEkf::identityConsistent(const Measurement& measurement) const {
 }
 
 std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
-    const std::vector<Measurement>& measurements) const {
+    const std::vector<Measurement>& measurements,
+    const std::vector<bool>& used_measurements,
+    const std::array<bool, kArmorSlotCount>& used_slots) const {
   // number/color 只做车辆身份门控。实际 E0-E3 槽位由几何预测和 NIS 决定。
   std::optional<Association> best;
   for (std::size_t measurement_index = 0; measurement_index < measurements.size();
        ++measurement_index) {
+    if (measurement_index >= used_measurements.size() ||
+        used_measurements[measurement_index]) {
+      continue;
+    }
     const Measurement& measurement = measurements[measurement_index];
     if (!validMeasurement(measurement) || !identityConsistent(measurement)) continue;
     const Matrix4 covariance = measurementCovariance(measurement);
     for (int armor_slot = 0; armor_slot < kArmorSlotCount; ++armor_slot) {
+      if (used_slots[static_cast<std::size_t>(armor_slot)]) continue;
       const Measurement predicted = observe(state_, armor_slot);
       const Jacobian h = observationJacobian(state_, armor_slot);
       if (measurement.has_inward_yaw) {
@@ -350,14 +386,17 @@ bool WholeVehicleEkf::stateFiniteAndPhysical() const {
 }
 
 TrackOutput WholeVehicleEkf::makeOutput(
-    std::uint64_t timestamp_ns, std::optional<int> associated_slot,
-    std::optional<double> nis) const {
+    std::uint64_t timestamp_ns,
+    const std::vector<AssociatedObservation>& associations) const {
   TrackOutput output;
   output.timestamp_ns = timestamp_ns;
   output.tracking_state = tracking_state_;
   output.has_state = has_state_;
-  output.associated_slot = associated_slot;
-  output.nis = nis;
+  output.associated_observations = associations;
+  if (!associations.empty()) {
+    output.associated_slot = associations.front().armor_slot;
+    output.nis = associations.front().nis;
+  }
   output.consecutive_hits = consecutive_hits_;
   output.consecutive_misses = consecutive_misses_;
   if (has_state_) {
@@ -381,33 +420,72 @@ TrackOutput WholeVehicleEkf::makeOutput(
 
 TrackOutput WholeVehicleEkf::update(
     std::uint64_t timestamp_ns, const std::vector<Measurement>& measurements) {
-  if (timestamp_ns == 0) return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+  if (timestamp_ns == 0) return makeOutput(timestamp_ns);
   for (const Measurement& measurement : measurements) {
     if (!validMeasurement(measurement) || measurement.timestamp_ns != timestamp_ns) {
-      return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+      return makeOutput(timestamp_ns);
     }
   }
 
   // 未初始化时只接受可靠 yaw；position-only 量测不会凭空确定整车朝向。
   if (!has_state_) {
-    for (const Measurement& measurement : measurements) {
-      if (initialize(measurement)) return makeOutput(timestamp_ns, 0, 0.0);
+    std::vector<AssociatedObservation> associations;
+    std::vector<bool> used_measurements(measurements.size(), false);
+    std::array<bool, kArmorSlotCount> used_slots{};
+    for (std::size_t index = 0; index < measurements.size(); ++index) {
+      const Measurement& measurement = measurements[index];
+      if (!initialize(measurement)) continue;
+
+      // The initializing armor defines E0. Updating its zero residual also
+      // records its measurement covariance before another armor constrains
+      // center and radius in the same exposure.
+      const Association initializer{static_cast<int>(index), 0, 0.0,
+                                    measurement.has_inward_yaw,
+                                    measurementCovariance(measurement)};
+      const AssociatedObservation accepted = makeAssociatedObservation(
+          state_, measurement, static_cast<int>(index), 0, 0.0,
+          measurement.has_inward_yaw);
+      if (!applyUpdate(measurement, initializer)) {
+        reset();
+        break;
+      }
+      associations.push_back(accepted);
+      used_measurements[index] = true;
+      used_slots[0] = true;
+      break;
     }
-    if (tracking_state_ == TrackingState::Lost) tracking_state_ = TrackingState::Uninitialized;
-    return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+    if (has_state_) {
+      while (associations.size() < kArmorSlotCount) {
+        const std::optional<Association> association =
+            associate(measurements, used_measurements, used_slots);
+        if (!association) {
+          break;
+        }
+        const AssociatedObservation accepted = makeAssociatedObservation(
+            state_, measurements[association->measurement_index],
+            association->measurement_index, association->armor_slot,
+            association->nis, association->includes_yaw);
+        if (!applyUpdate(measurements[association->measurement_index], *association)) {
+          break;
+        }
+        associations.push_back(accepted);
+        used_measurements[static_cast<std::size_t>(association->measurement_index)] = true;
+        used_slots[static_cast<std::size_t>(association->armor_slot)] = true;
+      }
+      return makeOutput(timestamp_ns, associations);
+    }
+    return makeOutput(timestamp_ns);
   }
 
   if (timestamp_ns <= last_timestamp_ns_) {
-    return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+    return makeOutput(timestamp_ns);
   }
   const double dt_s = static_cast<double>(timestamp_ns - last_timestamp_ns_) * 1e-9;
   if (!finite(dt_s) || dt_s <= 0.0 || dt_s > options_.maximum_frame_dt_s) {
     reset();
     tracking_state_ = TrackingState::Lost;
-    for (const Measurement& measurement : measurements) {
-      if (initialize(measurement)) return makeOutput(timestamp_ns, 0, 0.0);
-    }
-    return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+    // A valid current observation may start a fresh track after a long gap.
+    return update(timestamp_ns, measurements);
   }
 
   // dt 必须来自相邻曝光时间，不能使用处理耗时或固定 FPS。
@@ -424,13 +502,34 @@ TrackOutput WholeVehicleEkf::update(
   if (!stateFiniteAndPhysical()) {
     reset();
     tracking_state_ = TrackingState::Lost;
-    return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+    return makeOutput(timestamp_ns);
   }
 
-  // 所有候选失败时保持预测状态，由 TemporarilyLost 让 Q 扩大不确定性。
-  const std::optional<Association> association = associate(measurements);
-  if (association && applyUpdate(measurements[association->measurement_index], *association)) {
-    const Measurement& measurement = measurements[association->measurement_index];
+  // Associate without replacement. Each accepted detection and each physical
+  // E0-E3 slot is used at most once; after an update, association is repeated
+  // against the corrected state so two visible armors jointly constrain it.
+  std::vector<AssociatedObservation> associations;
+  std::vector<bool> used_measurements(measurements.size(), false);
+  std::array<bool, kArmorSlotCount> used_slots{};
+  while (associations.size() < kArmorSlotCount) {
+    const std::optional<Association> association =
+        associate(measurements, used_measurements, used_slots);
+    if (!association) {
+      break;
+    }
+    const AssociatedObservation accepted = makeAssociatedObservation(
+        state_, measurements[association->measurement_index],
+        association->measurement_index, association->armor_slot,
+        association->nis, association->includes_yaw);
+    if (!applyUpdate(measurements[association->measurement_index], *association)) {
+      break;
+    }
+    associations.push_back(accepted);
+    used_measurements[static_cast<std::size_t>(association->measurement_index)] = true;
+    used_slots[static_cast<std::size_t>(association->armor_slot)] = true;
+  }
+  if (!associations.empty()) {
+    const Measurement& measurement = measurements[associations.front().measurement_index];
     if (tracked_color_id_ < 0) tracked_color_id_ = measurement.color_id;
     if (tracked_number_id_ < 0) tracked_number_id_ = measurement.number_id;
     ++consecutive_hits_;
@@ -442,7 +541,7 @@ TrackOutput WholeVehicleEkf::update(
     } else if (tracking_state_ == TrackingState::TemporarilyLost) {
       tracking_state_ = TrackingState::Tracking;
     }
-    return makeOutput(timestamp_ns, association->armor_slot, association->nis);
+    return makeOutput(timestamp_ns, associations);
   }
 
   consecutive_hits_ = 0;
@@ -455,7 +554,7 @@ TrackOutput WholeVehicleEkf::update(
   } else {
     tracking_state_ = TrackingState::TemporarilyLost;
   }
-  return makeOutput(timestamp_ns, std::nullopt, std::nullopt);
+  return makeOutput(timestamp_ns);
 }
 
 }  // namespace yolo_detect::tracking

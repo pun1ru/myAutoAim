@@ -72,6 +72,21 @@ struct DecodedArmor {
   double inward_yaw_T_rad = 0.0;
 };
 
+// A measurement accepted during the current frame. Measurement indices refer
+// to the vector passed to WholeVehicleEkf::update, rather than detector IDs.
+struct AssociatedObservation {
+  int measurement_index = -1;
+  int armor_slot = -1;
+  double nis = 0.0;
+  bool includes_yaw = false;
+  Eigen::Vector3d predicted_position_T_m = Eigen::Vector3d::Zero();
+  Eigen::Vector3d position_innovation_T_m = Eigen::Vector3d::Zero();
+  double predicted_inward_yaw_T_rad = 0.0;
+  double yaw_innovation_rad = 0.0;
+  // Positive means the observation lies toward the predicted vehicle center.
+  double radial_innovation_m = 0.0;
+};
+
 // 纯函数：按匀速、匀角速度模型预测均值，不修改协方差。
 [[nodiscard]] State predictState(const State& state, double dt_s);
 // 纯函数：返回指定物理槽位的 h(x,i)=[x,y,z,inward_yaw]。
@@ -136,6 +151,7 @@ struct TrackOutput {
   double height_odd_delta_m = 0.0;
   std::optional<int> associated_slot;
   std::optional<double> nis;
+  std::vector<AssociatedObservation> associated_observations;
   int consecutive_hits = 0;
   int consecutive_misses = 0;
   std::array<DecodedArmor, kArmorSlotCount> predicted_armors{};
@@ -171,14 +187,16 @@ class WholeVehicleEkf {
       const Measurement& measurement) const;
   [[nodiscard]] bool identityConsistent(const Measurement& measurement) const;
   [[nodiscard]] std::optional<Association> associate(
-      const std::vector<Measurement>& measurements) const;
+      const std::vector<Measurement>& measurements,
+      const std::vector<bool>& used_measurements,
+      const std::array<bool, kArmorSlotCount>& used_slots) const;
   [[nodiscard]] bool applyUpdate(const Measurement& measurement,
                                  const Association& association);
   [[nodiscard]] bool initialize(const Measurement& measurement);
   [[nodiscard]] bool stateFiniteAndPhysical() const;
-  [[nodiscard]] TrackOutput makeOutput(std::uint64_t timestamp_ns,
-                                       std::optional<int> associated_slot,
-                                       std::optional<double> nis) const;
+  [[nodiscard]] TrackOutput makeOutput(
+      std::uint64_t timestamp_ns,
+      const std::vector<AssociatedObservation>& associations = {}) const;
 
   WholeVehicleEkfOptions options_;
   State state_;

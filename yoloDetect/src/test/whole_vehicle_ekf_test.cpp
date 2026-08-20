@@ -160,6 +160,33 @@ void testNisOutlierRejected() {
           "outlier frame must transition to temporarily lost");
 }
 
+void testTwoVisibleArmorsUpdateOneFrame() {
+  tracking::WholeVehicleEkfOptions options;
+  options.radius_prior_m = 0.26;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = 0.32;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.0;
+  const std::uint64_t timestamp_ns = 2'500'000'000ULL;
+  const tracking::TrackOutput output = ekf.update(
+      timestamp_ns, {observationAt(truth, 0, timestamp_ns),
+                     observationAt(truth, 1, timestamp_ns)});
+  require(output.associated_observations.size() == 2,
+          "two visible armors must both update the same EKF frame");
+  require(output.associated_observations[0].armor_slot == 0 &&
+              output.associated_observations[1].armor_slot == 1,
+          "one-to-one association must keep the two physical armor slots distinct");
+  require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
+              std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
+          "the second armor observation must reduce radius-prior error");
+}
+
 void testLostPredictionAndReset() {
   tracking::WholeVehicleEkfOptions options;
   options.lost_frame_limit = 2;
@@ -235,6 +262,7 @@ int main() {
     testYawWrap();
     testSlotSwitchDoesNotJumpCenter();
     testNisOutlierRejected();
+    testTwoVisibleArmorsUpdateOneFrame();
     testLostPredictionAndReset();
     testJosephCovariance();
     testIrregularDtTrend();
