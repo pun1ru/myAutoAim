@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 
@@ -21,11 +22,15 @@ bool validSlot(int armor_slot) {
 }
 
 bool validMeasurement(const Measurement& measurement) {
+  const bool camera_geometry_valid =
+      !measurement.has_exposure_camera_geometry ||
+      (measurement.R_TC.allFinite() &&
+       measurement.camera_position_T_m.allFinite());
   return measurement.timestamp_ns != 0 && measurement.position_T_m.allFinite() &&
          finite(measurement.camera_range_m) && measurement.camera_range_m > 0.0 &&
          finite(measurement.reprojection_rms_px) &&
          finite(measurement.confidence) && finite(measurement.keypoint_quality) &&
-         finite(measurement.view_quality) &&
+         finite(measurement.view_quality) && camera_geometry_valid &&
          (!measurement.has_inward_yaw || finite(measurement.inward_yaw_T_rad));
 }
 
@@ -44,7 +49,7 @@ AssociatedObservation makeAssociatedObservation(
   output.position_innovation_T_m =
       measurement.position_T_m - predicted.position_T_m;
   output.predicted_inward_yaw_T_rad = predicted.inward_yaw_T_rad;
-  if (includes_yaw) {
+  if (measurement.has_inward_yaw) {
     output.yaw_innovation_rad = wrapToPi(
         measurement.inward_yaw_T_rad - predicted.inward_yaw_T_rad);
   }
@@ -147,10 +152,27 @@ WholeVehicleEkf::WholeVehicleEkf(WholeVehicleEkfOptions options)
   if (!finite(options_.radius_prior_m) || options_.radius_prior_m <= 0.0 ||
       !finite(options_.minimum_radius_m) || options_.minimum_radius_m <= 0.0 ||
       options_.minimum_radius_m >= options_.radius_prior_m ||
+      !finite(options_.maximum_radius_m) ||
+      options_.maximum_radius_m <= options_.radius_prior_m ||
+      !finite(options_.maximum_radius_difference_m) ||
+      options_.maximum_radius_difference_m < 0.0 ||
+      !finite(options_.maximum_height_difference_m) ||
+      options_.maximum_height_difference_m < 0.0 ||
       !finite(options_.q_linear_acceleration) ||
       !finite(options_.q_angular_acceleration) ||
       !finite(options_.q_geometry) || options_.q_linear_acceleration < 0.0 ||
       options_.q_angular_acceleration < 0.0 || options_.q_geometry < 0.0 ||
+      !finite(options_.maximum_yaw_update_innovation_rad) ||
+      options_.maximum_yaw_update_innovation_rad <= 0.0 ||
+      !finite(options_.maximum_yaw_association_innovation_rad) ||
+      options_.maximum_yaw_association_innovation_rad <
+          options_.maximum_yaw_update_innovation_rad ||
+      !finite(options_.yaw_phase_cost_std_rad) ||
+      options_.yaw_phase_cost_std_rad <= 0.0 ||
+      !finite(options_.geometry_yaw_consistency_rad) ||
+      options_.geometry_yaw_consistency_rad <= 0.0 ||
+      !finite(options_.geometry_minimum_baseline_m) ||
+      options_.geometry_minimum_baseline_m <= 0.0 ||
       options_.confirming_hits <= 0 || options_.lost_frame_limit <= 0 ||
       !finite(options_.lost_time_limit_s) || options_.lost_time_limit_s <= 0.0 ||
       !finite(options_.maximum_frame_dt_s) || options_.maximum_frame_dt_s <= 0.0) {
@@ -167,6 +189,7 @@ void WholeVehicleEkf::reset() noexcept {
   consecutive_misses_ = 0;
   tracked_color_id_ = -1;
   tracked_number_id_ = -1;
+  last_associated_slots_.fill(false);
   tracking_state_ = TrackingState::Uninitialized;
 }
 
@@ -215,9 +238,21 @@ Matrix4 WholeVehicleEkf::measurementCovariance(
       (1.0 + options_.range_noise_scale_per_m * range_m) /
       (confidence * keypoint_quality * view_quality);
   Matrix4 covariance = Matrix4::Zero();
-  covariance(0, 0) = square(options_.position_std_xy_m * scale);
-  covariance(1, 1) = square(options_.position_std_xy_m * scale);
-  covariance(2, 2) = square(options_.position_std_z_m * scale);
+  Eigen::Matrix3d position_covariance_camera = Eigen::Matrix3d::Zero();
+  position_covariance_camera(0, 0) =
+      square(options_.position_std_xy_m * scale);
+  position_covariance_camera(1, 1) =
+      square(options_.position_std_xy_m * scale);
+  position_covariance_camera(2, 2) =
+      square(options_.position_std_z_m * scale);
+  const Eigen::Matrix3d position_covariance_tracker =
+      measurement.has_exposure_camera_geometry
+          ? measurement.R_TC * position_covariance_camera *
+                measurement.R_TC.transpose()
+          : position_covariance_camera;
+  covariance.template topLeftCorner<3, 3>() =
+      0.5 * (position_covariance_tracker +
+             position_covariance_tracker.transpose());
   double yaw_std = options_.yaw_std_rad * scale;
   if (measurement.has_inward_yaw && finite(measurement.yaw_std_rad) &&
       measurement.yaw_std_rad > 0.0) {
@@ -273,7 +308,7 @@ std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
         if (!finite(nis) || nis > options_.nis_gate_4d) continue;
         if (!best || nis < best->nis) {
           best = Association{static_cast<int>(measurement_index), armor_slot, nis,
-                             true, covariance};
+                             true, nis, covariance};
         }
       } else {
         const Eigen::Matrix<double, 3, kWholeVehicleStateDimension> h_position =
@@ -290,7 +325,7 @@ std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
         if (!finite(nis) || nis > options_.nis_gate_3d) continue;
         if (!best || nis < best->nis) {
           best = Association{static_cast<int>(measurement_index), armor_slot, nis,
-                             false, covariance};
+                             false, nis, covariance};
         }
       }
     }
@@ -300,6 +335,7 @@ std::optional<WholeVehicleEkf::Association> WholeVehicleEkf::associate(
 
 bool WholeVehicleEkf::applyUpdate(const Measurement& measurement,
                                   const Association& association) {
+  const State prior = state_;
   const Measurement predicted = observe(state_, association.armor_slot);
   const Jacobian h = observationJacobian(state_, association.armor_slot);
   const Matrix11 identity = Matrix11::Identity();
@@ -343,7 +379,266 @@ bool WholeVehicleEkf::applyUpdate(const Measurement& measurement,
                         gain * covariance_position * gain.transpose();
   }
   state_.covariance = 0.5 * (state_.covariance + state_.covariance.transpose());
-  return stateFiniteAndPhysical();
+  if (!stateFiniteAndPhysical()) {
+    state_ = prior;
+    return false;
+  }
+  return true;
+}
+
+bool WholeVehicleEkf::slotVisible(const Measurement& measurement,
+                                  int armor_slot) const {
+  if (!measurement.has_exposure_camera_geometry) return true;
+  const Measurement predicted = observe(state_, armor_slot);
+  const Eigen::Vector3d to_camera =
+      measurement.camera_position_T_m - predicted.position_T_m;
+  if (to_camera.squaredNorm() <= 1e-12) return false;
+  const double phi = predicted.inward_yaw_T_rad;
+  const Eigen::Vector3d outward_normal(-std::cos(phi), -std::sin(phi), 0.0);
+  const double facing_cosine = outward_normal.dot(to_camera.normalized());
+  return finite(facing_cosine) &&
+         facing_cosine >= options_.minimum_visibility_cosine;
+}
+
+double WholeVehicleEkf::slotTransitionPenalty(int armor_slot) const {
+  bool has_previous_slot = false;
+  int minimum_distance = kArmorSlotCount;
+  for (int previous = 0; previous < kArmorSlotCount; ++previous) {
+    if (!last_associated_slots_[static_cast<std::size_t>(previous)]) continue;
+    has_previous_slot = true;
+    const int direct = std::abs(armor_slot - previous);
+    minimum_distance = std::min(minimum_distance,
+                                std::min(direct, kArmorSlotCount - direct));
+  }
+  if (!has_previous_slot || minimum_distance == 0) return 0.0;
+  const double loss_scale = consecutive_misses_ > 0 ? 0.5 : 1.0;
+  return loss_scale * (minimum_distance == 1
+                           ? options_.adjacent_slot_penalty
+                           : options_.opposite_slot_penalty);
+}
+
+std::optional<WholeVehicleEkf::Association>
+WholeVehicleEkf::makeAssociationCandidate(
+    const std::vector<Measurement>& measurements, int measurement_index,
+    int armor_slot) const {
+  if (measurement_index < 0 ||
+      measurement_index >= static_cast<int>(measurements.size()) ||
+      !validSlot(armor_slot)) {
+    return std::nullopt;
+  }
+  const Measurement& measurement =
+      measurements[static_cast<std::size_t>(measurement_index)];
+  if (!validMeasurement(measurement) || !identityConsistent(measurement) ||
+      !slotVisible(measurement, armor_slot)) {
+    return std::nullopt;
+  }
+
+  const Measurement predicted = observe(state_, armor_slot);
+  const Jacobian h = observationJacobian(state_, armor_slot);
+  const Matrix4 covariance = measurementCovariance(measurement);
+  const Eigen::Vector3d position_innovation =
+      measurement.position_T_m - predicted.position_T_m;
+  const Eigen::Matrix<double, 3, kWholeVehicleStateDimension> h_position =
+      h.template topRows<3>();
+  const Eigen::Matrix3d position_covariance =
+      covariance.template topLeftCorner<3, 3>();
+
+  double yaw_innovation = 0.0;
+  const bool has_yaw = measurement.has_inward_yaw;
+  if (has_yaw) {
+    yaw_innovation = wrapToPi(measurement.inward_yaw_T_rad -
+                              predicted.inward_yaw_T_rad);
+    if (!finite(yaw_innovation) ||
+        std::abs(yaw_innovation) >
+            options_.maximum_yaw_association_innovation_rad) {
+      return std::nullopt;
+    }
+  }
+
+  const bool include_yaw =
+      has_yaw && std::abs(yaw_innovation) <=
+                     options_.maximum_yaw_update_innovation_rad;
+  double nis = 0.0;
+  if (include_yaw) {
+    Vector4 innovation;
+    innovation.template head<3>() = position_innovation;
+    innovation[3] = yaw_innovation;
+    const Matrix4 innovation_covariance =
+        h * state_.covariance * h.transpose() + covariance;
+    Eigen::LDLT<Matrix4> ldlt(innovation_covariance);
+    if (ldlt.info() != Eigen::Success) return std::nullopt;
+    const Vector4 solved = ldlt.solve(innovation);
+    if (!solved.allFinite()) return std::nullopt;
+    nis = innovation.dot(solved);
+    if (!finite(nis) || nis > options_.nis_gate_4d) return std::nullopt;
+  } else {
+    const Eigen::Matrix3d innovation_covariance =
+        h_position * state_.covariance * h_position.transpose() +
+        position_covariance;
+    Eigen::LDLT<Eigen::Matrix3d> ldlt(innovation_covariance);
+    if (ldlt.info() != Eigen::Success) return std::nullopt;
+    const Eigen::Vector3d solved = ldlt.solve(position_innovation);
+    if (!solved.allFinite()) return std::nullopt;
+    nis = position_innovation.dot(solved);
+    if (!finite(nis) || nis > options_.nis_gate_3d) return std::nullopt;
+  }
+
+  double cost = nis + slotTransitionPenalty(armor_slot);
+  if (has_yaw && !include_yaw) {
+    cost += square(yaw_innovation / options_.yaw_phase_cost_std_rad);
+  }
+  return Association{measurement_index, armor_slot, nis, include_yaw, cost,
+                     covariance};
+}
+
+std::vector<WholeVehicleEkf::Association> WholeVehicleEkf::associateAll(
+    const std::vector<Measurement>& measurements) const {
+  std::vector<std::array<std::optional<Association>, kArmorSlotCount>> candidates(
+      measurements.size());
+  for (std::size_t measurement_index = 0;
+       measurement_index < measurements.size(); ++measurement_index) {
+    for (int slot = 0; slot < kArmorSlotCount; ++slot) {
+      candidates[measurement_index][static_cast<std::size_t>(slot)] =
+          makeAssociationCandidate(measurements,
+                                   static_cast<int>(measurement_index), slot);
+    }
+  }
+
+  std::vector<Association> best;
+  std::vector<Association> current;
+  std::vector<bool> used_measurements(measurements.size(), false);
+  double best_cost = std::numeric_limits<double>::infinity();
+  std::function<void(int, double)> search = [&](int slot, double cost) {
+    if (slot == kArmorSlotCount) {
+      if (current.size() > best.size() ||
+          (current.size() == best.size() && cost < best_cost)) {
+        best = current;
+        best_cost = cost;
+      }
+      return;
+    }
+    search(slot + 1, cost);
+    for (std::size_t measurement_index = 0;
+         measurement_index < measurements.size(); ++measurement_index) {
+      if (used_measurements[measurement_index]) continue;
+      const auto& candidate =
+          candidates[measurement_index][static_cast<std::size_t>(slot)];
+      if (!candidate) continue;
+      used_measurements[measurement_index] = true;
+      current.push_back(*candidate);
+      search(slot + 1, cost + candidate->cost);
+      current.pop_back();
+      used_measurements[measurement_index] = false;
+    }
+  };
+  search(0, 0.0);
+  return best;
+}
+
+bool WholeVehicleEkf::geometryObservable(
+    const std::vector<Measurement>& measurements,
+    const std::vector<Association>& associations) const {
+  if (associations.size() < 2) return false;
+  for (std::size_t first = 0; first < associations.size(); ++first) {
+    const Association& a = associations[first];
+    const Measurement& measurement_a =
+        measurements[static_cast<std::size_t>(a.measurement_index)];
+    if (!a.includes_yaw) return false;
+    for (std::size_t second = first + 1; second < associations.size(); ++second) {
+      const Association& b = associations[second];
+      const Measurement& measurement_b =
+          measurements[static_cast<std::size_t>(b.measurement_index)];
+      if (!b.includes_yaw ||
+          (measurement_a.position_T_m - measurement_b.position_T_m).norm() <
+              options_.geometry_minimum_baseline_m) {
+        return false;
+      }
+      const double measured_delta = wrapToPi(
+          measurement_a.inward_yaw_T_rad - measurement_b.inward_yaw_T_rad);
+      const double expected_delta = wrapToPi(
+          (a.armor_slot - b.armor_slot) * (kPi * 0.5));
+      if (std::abs(wrapToPi(measured_delta - expected_delta)) >
+          options_.geometry_yaw_consistency_rad) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool WholeVehicleEkf::applyJointUpdate(
+    const std::vector<Measurement>& measurements,
+    const std::vector<Association>& associations, bool update_geometry) {
+  if (associations.empty() || associations.size() > kArmorSlotCount) return false;
+  const State prior = state_;
+  StackedJacobian h_stacked = StackedJacobian::Zero();
+  Vector16 innovation = Vector16::Zero();
+  Matrix16 covariance = Matrix16::Identity();
+
+  for (std::size_t index = 0; index < associations.size(); ++index) {
+    const Association& association = associations[index];
+    const Measurement& measurement =
+        measurements[static_cast<std::size_t>(association.measurement_index)];
+    const Measurement predicted = observe(prior, association.armor_slot);
+    Jacobian h = observationJacobian(prior, association.armor_slot);
+    Matrix4 block_covariance = association.covariance;
+    Vector4 block_innovation = Vector4::Zero();
+    block_innovation.template head<3>() =
+        measurement.position_T_m - predicted.position_T_m;
+
+    if (!update_geometry) {
+      h.col(RadiusEven).setZero();
+      h.col(RadiusOddDelta).setZero();
+      h.col(HeightOddDelta).setZero();
+    }
+    if (association.includes_yaw) {
+      block_innovation[3] = wrapToPi(
+          measurement.inward_yaw_T_rad - predicted.inward_yaw_T_rad);
+    } else {
+      h.row(3).setZero();
+      block_covariance.row(3).setZero();
+      block_covariance.col(3).setZero();
+      block_covariance(3, 3) = 1.0;
+    }
+
+    const int row = static_cast<int>(index) * kArmorObservationDimension;
+    h_stacked.template block<kArmorObservationDimension,
+                             kWholeVehicleStateDimension>(row, 0) = h;
+    innovation.template segment<kArmorObservationDimension>(row) =
+        block_innovation;
+    covariance.template block<kArmorObservationDimension,
+                              kArmorObservationDimension>(row, row) =
+        block_covariance;
+  }
+
+  const Matrix16 innovation_covariance =
+      h_stacked * prior.covariance * h_stacked.transpose() + covariance;
+  Eigen::LDLT<Matrix16> ldlt(innovation_covariance);
+  if (ldlt.info() != Eigen::Success) return false;
+  const Eigen::Matrix<double, kMaximumStackedObservationDimension,
+                      kWholeVehicleStateDimension>
+      solved = ldlt.solve(h_stacked * prior.covariance);
+  if (!solved.allFinite()) return false;
+  Eigen::Matrix<double, kWholeVehicleStateDimension,
+                kMaximumStackedObservationDimension>
+      gain = solved.transpose();
+  if (!update_geometry) {
+    gain.row(RadiusEven).setZero();
+    gain.row(RadiusOddDelta).setZero();
+    gain.row(HeightOddDelta).setZero();
+  }
+
+  state_.x = prior.x + gain * innovation;
+  const Matrix11 residual = Matrix11::Identity() - gain * h_stacked;
+  state_.covariance = residual * prior.covariance * residual.transpose() +
+                      gain * covariance * gain.transpose();
+  state_.covariance =
+      0.5 * (state_.covariance + state_.covariance.transpose());
+  if (!stateFiniteAndPhysical()) {
+    state_ = prior;
+    return false;
+  }
+  return true;
 }
 
 bool WholeVehicleEkf::initialize(const Measurement& measurement) {
@@ -382,10 +677,17 @@ bool WholeVehicleEkf::initialize(const Measurement& measurement) {
 }
 
 bool WholeVehicleEkf::stateFiniteAndPhysical() const {
+  const double even_radius = state_.x[RadiusEven];
+  const double odd_radius = even_radius + state_.x[RadiusOddDelta];
   return state_.x.allFinite() && state_.covariance.allFinite() &&
-         state_.x[RadiusEven] >= options_.minimum_radius_m &&
-         state_.x[RadiusEven] + state_.x[RadiusOddDelta] >=
-             options_.minimum_radius_m;
+         even_radius >= options_.minimum_radius_m &&
+         even_radius <= options_.maximum_radius_m &&
+         odd_radius >= options_.minimum_radius_m &&
+         odd_radius <= options_.maximum_radius_m &&
+         std::abs(state_.x[RadiusOddDelta]) <=
+             options_.maximum_radius_difference_m &&
+         std::abs(state_.x[HeightOddDelta]) <=
+             options_.maximum_height_difference_m;
 }
 
 TrackOutput WholeVehicleEkf::makeOutput(
@@ -432,50 +734,31 @@ TrackOutput WholeVehicleEkf::update(
 
   // 未初始化时只接受可靠 yaw；position-only 量测不会凭空确定整车朝向。
   if (!has_state_) {
-    std::vector<AssociatedObservation> associations;
-    std::vector<bool> used_measurements(measurements.size(), false);
-    std::array<bool, kArmorSlotCount> used_slots{};
-    for (std::size_t index = 0; index < measurements.size(); ++index) {
-      const Measurement& measurement = measurements[index];
+    for (const Measurement& measurement : measurements) {
       if (!initialize(measurement)) continue;
-
-      // The initializing armor defines E0. Updating its zero residual also
-      // records its measurement covariance before another armor constrains
-      // center and radius in the same exposure.
-      const Association initializer{static_cast<int>(index), 0, 0.0,
-                                    measurement.has_inward_yaw,
-                                    measurementCovariance(measurement)};
-      const AssociatedObservation accepted = makeAssociatedObservation(
-          state_, measurement, static_cast<int>(index), 0, 0.0,
-          measurement.has_inward_yaw);
-      if (!applyUpdate(measurement, initializer)) {
+      const std::vector<Association> matched = associateAll(measurements);
+      std::vector<AssociatedObservation> accepted;
+      accepted.reserve(matched.size());
+      for (const Association& association : matched) {
+        accepted.push_back(makeAssociatedObservation(
+            state_, measurements[static_cast<std::size_t>(
+                        association.measurement_index)],
+            association.measurement_index, association.armor_slot,
+            association.nis, association.includes_yaw));
+      }
+      const bool update_geometry = geometryObservable(measurements, matched);
+      if (!matched.empty() &&
+          !applyJointUpdate(measurements, matched, update_geometry) &&
+          !applyJointUpdate(measurements, matched, false)) {
         reset();
-        break;
+        return makeOutput(timestamp_ns);
       }
-      associations.push_back(accepted);
-      used_measurements[index] = true;
-      used_slots[0] = true;
-      break;
-    }
-    if (has_state_) {
-      while (associations.size() < kArmorSlotCount) {
-        const std::optional<Association> association =
-            associate(measurements, used_measurements, used_slots);
-        if (!association) {
-          break;
-        }
-        const AssociatedObservation accepted = makeAssociatedObservation(
-            state_, measurements[association->measurement_index],
-            association->measurement_index, association->armor_slot,
-            association->nis, association->includes_yaw);
-        if (!applyUpdate(measurements[association->measurement_index], *association)) {
-          break;
-        }
-        associations.push_back(accepted);
-        used_measurements[static_cast<std::size_t>(association->measurement_index)] = true;
-        used_slots[static_cast<std::size_t>(association->armor_slot)] = true;
+      last_associated_slots_.fill(false);
+      for (const Association& association : matched) {
+        last_associated_slots_[static_cast<std::size_t>(
+            association.armor_slot)] = true;
       }
-      return makeOutput(timestamp_ns, associations);
+      return makeOutput(timestamp_ns, accepted);
     }
     return makeOutput(timestamp_ns);
   }
@@ -508,33 +791,37 @@ TrackOutput WholeVehicleEkf::update(
     return makeOutput(timestamp_ns);
   }
 
-  // Associate without replacement. Each accepted detection and each physical
-  // E0-E3 slot is used at most once; after an update, association is repeated
-  // against the corrected state so two visible armors jointly constrain it.
-  std::vector<AssociatedObservation> associations;
-  std::vector<bool> used_measurements(measurements.size(), false);
-  std::array<bool, kArmorSlotCount> used_slots{};
-  while (associations.size() < kArmorSlotCount) {
-    const std::optional<Association> association =
-        associate(measurements, used_measurements, used_slots);
-    if (!association) {
-      break;
-    }
-    const AssociatedObservation accepted = makeAssociatedObservation(
-        state_, measurements[association->measurement_index],
-        association->measurement_index, association->armor_slot,
-        association->nis, association->includes_yaw);
-    if (!applyUpdate(measurements[association->measurement_index], *association)) {
-      break;
-    }
-    associations.push_back(accepted);
-    used_measurements[static_cast<std::size_t>(association->measurement_index)] = true;
-    used_slots[static_cast<std::size_t>(association->armor_slot)] = true;
+  // Every candidate is evaluated against the same predicted snapshot. The
+  // accepted one-to-one assignment is then applied as one fixed-size joint
+  // update, so detector ordering cannot change the posterior.
+  const std::vector<Association> matched = associateAll(measurements);
+  std::vector<AssociatedObservation> accepted;
+  accepted.reserve(matched.size());
+  for (const Association& association : matched) {
+    accepted.push_back(makeAssociatedObservation(
+        state_, measurements[static_cast<std::size_t>(
+                    association.measurement_index)],
+        association.measurement_index, association.armor_slot,
+        association.nis, association.includes_yaw));
   }
-  if (!associations.empty()) {
-    const Measurement& measurement = measurements[associations.front().measurement_index];
+  bool update_succeeded = false;
+  if (!matched.empty()) {
+    const bool update_geometry = geometryObservable(measurements, matched);
+    update_succeeded = applyJointUpdate(measurements, matched, update_geometry);
+    if (!update_succeeded && update_geometry) {
+      update_succeeded = applyJointUpdate(measurements, matched, false);
+    }
+  }
+  if (update_succeeded) {
+    const Measurement& measurement = measurements[static_cast<std::size_t>(
+        matched.front().measurement_index)];
     if (tracked_color_id_ < 0) tracked_color_id_ = measurement.color_id;
     if (tracked_number_id_ < 0) tracked_number_id_ = measurement.number_id;
+    last_associated_slots_.fill(false);
+    for (const Association& association : matched) {
+      last_associated_slots_[static_cast<std::size_t>(association.armor_slot)] =
+          true;
+    }
     ++consecutive_hits_;
     consecutive_misses_ = 0;
     last_hit_timestamp_ns_ = timestamp_ns;
@@ -544,7 +831,7 @@ TrackOutput WholeVehicleEkf::update(
     } else if (tracking_state_ == TrackingState::TemporarilyLost) {
       tracking_state_ = TrackingState::Tracking;
     }
-    return makeOutput(timestamp_ns, associations);
+    return makeOutput(timestamp_ns, accepted);
   }
 
   consecutive_hits_ = 0;

@@ -191,6 +191,133 @@ void testTwoVisibleArmorsUpdateOneFrame() {
           "the second armor observation must reduce radius-prior error");
 }
 
+void testSingleArmorDoesNotChangeGeometry() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.0;
+  const std::uint64_t t0 = 2'700'000'000ULL;
+  initializeTracker(ekf, truth, t0);
+
+  tracking::Measurement measurement =
+      observationAt(truth, 0, t0 + 20'000'000ULL);
+  measurement.position_T_m += Eigen::Vector3d(0.025, -0.015, 0.01);
+  const tracking::TrackOutput output =
+      ekf.update(measurement.timestamp_ns, {measurement});
+  require(output.associated_observations.size() == 1,
+          "single visible armor must still update motion state");
+  requireNear(output.radius_even_m, options.radius_prior_m, 1e-12,
+              "single armor must not change even radius");
+  requireNear(output.radius_odd_delta_m, 0.0, 1e-12,
+              "single armor must not change radius difference");
+  requireNear(output.height_odd_delta_m, 0.0, 1e-12,
+              "single armor must not change height difference");
+}
+
+void testLargeYawResidualBecomesPositionOnly() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.0;
+  const std::uint64_t t0 = 2'800'000'000ULL;
+  initializeTracker(ekf, truth, t0);
+  tracking::Measurement measurement =
+      observationAt(truth, 0, t0 + 20'000'000ULL);
+  measurement.inward_yaw_T_rad += 0.5;
+  const tracking::TrackOutput output =
+      ekf.update(measurement.timestamp_ns, {measurement});
+  require(output.associated_observations.size() == 1,
+          "moderate yaw error must retain the position observation");
+  require(!output.associated_observations.front().includes_yaw,
+          "large yaw innovation must not update theta or omega");
+  requireNear(output.state.x[tracking::Theta], truth.x[tracking::Theta], 1e-9,
+              "position-only zero residual must not pull theta");
+}
+
+void testJointUpdateIndependentOfDetectionOrder() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf first_order(options);
+  tracking::WholeVehicleEkf second_order(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.0;
+  const std::uint64_t t0 = 2'900'000'000ULL;
+  initializeTracker(first_order, truth, t0);
+  initializeTracker(second_order, truth, t0);
+  tracking::Measurement slot_zero =
+      observationAt(truth, 0, t0 + 20'000'000ULL);
+  tracking::Measurement slot_three =
+      observationAt(truth, 3, t0 + 20'000'000ULL);
+  slot_zero.position_T_m += Eigen::Vector3d(0.01, -0.005, 0.002);
+  slot_three.position_T_m += Eigen::Vector3d(-0.006, 0.008, -0.003);
+  const tracking::TrackOutput output_ab = first_order.update(
+      slot_zero.timestamp_ns, {slot_zero, slot_three});
+  const tracking::TrackOutput output_ba = second_order.update(
+      slot_zero.timestamp_ns, {slot_three, slot_zero});
+  require(output_ab.associated_observations.size() == 2 &&
+              output_ba.associated_observations.size() == 2,
+          "both observation orders must retain both armors");
+  require((output_ab.state.x - output_ba.state.x).norm() < 1e-10,
+          "joint posterior must not depend on detector ordering");
+  require((output_ab.state.covariance - output_ba.state.covariance)
+              .cwiseAbs()
+              .maxCoeff() < 1e-10,
+          "joint covariance must not depend on detector ordering");
+}
+
+void testRotatingSlotSequenceKeepsCenterStable() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 1.2;
+  std::uint64_t timestamp_ns = 3'100'000'000ULL;
+  initializeTracker(ekf, truth, timestamp_ns);
+  const Eigen::Vector3d expected_center(
+      truth.x[tracking::CenterX], truth.x[tracking::CenterY],
+      truth.x[tracking::CenterZ]);
+  const std::vector<int> visible_slots{3, 3, 2, 2, 1, 1, 0};
+  for (int slot : visible_slots) {
+    constexpr double kDt = 0.1;
+    truth = tracking::predictState(truth, kDt);
+    timestamp_ns += 100'000'000ULL;
+    const tracking::Measurement measurement =
+        observationAt(truth, slot, timestamp_ns);
+    const tracking::TrackOutput output = ekf.update(timestamp_ns, {measurement});
+    require(output.associated_slot.has_value() &&
+                *output.associated_slot == slot,
+            "rotating target must advance the physical armor slot");
+    require((output.center_T_m - expected_center).norm() < 0.05,
+            "slot transitions must not move a stationary vehicle center");
+  }
+}
+
 void testLostPredictionAndReset() {
   tracking::WholeVehicleEkfOptions options;
   options.lost_frame_limit = 2;
@@ -267,6 +394,10 @@ int main() {
     testSlotSwitchDoesNotJumpCenter();
     testNisOutlierRejected();
     testTwoVisibleArmorsUpdateOneFrame();
+    testSingleArmorDoesNotChangeGeometry();
+    testLargeYawResidualBecomesPositionOnly();
+    testJointUpdateIndependentOfDetectionOrder();
+    testRotatingSlotSequenceKeepsCenterStable();
     testLostPredictionAndReset();
     testJosephCovariance();
     testIrregularDtTrend();

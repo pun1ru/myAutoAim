@@ -41,6 +41,19 @@ std::optional<Measurement> makeTrackerMeasurement(
     return std::nullopt;
   }
   measurement.reprojection_rms_px = pose.reprojection_rms_px;
+  const cv::Matx33d R_TC = coordinates::cameraRotationOdom(exposure_snapshot);
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      measurement.R_TC(row, column) = R_TC(row, column);
+    }
+  }
+  measurement.camera_position_T_m = {
+      exposure_snapshot.camera_position_odom_m[0],
+      exposure_snapshot.camera_position_odom_m[1],
+      exposure_snapshot.camera_position_odom_m[2]};
+  measurement.has_exposure_camera_geometry =
+      measurement.R_TC.allFinite() &&
+      measurement.camera_position_T_m.allFinite();
   measurement.confidence = detection.confidence;
   measurement.color_id = detection.color_id;
   measurement.number_id = detection.number_id;

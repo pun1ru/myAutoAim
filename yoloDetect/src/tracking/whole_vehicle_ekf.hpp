@@ -37,6 +37,15 @@ using Matrix4 = Eigen::Matrix<double, kArmorObservationDimension,
                                kArmorObservationDimension>;
 using Jacobian = Eigen::Matrix<double, kArmorObservationDimension,
                                kWholeVehicleStateDimension>;
+inline constexpr int kMaximumStackedObservationDimension =
+    kArmorObservationDimension * kArmorSlotCount;
+using Vector16 =
+    Eigen::Matrix<double, kMaximumStackedObservationDimension, 1>;
+using Matrix16 = Eigen::Matrix<double, kMaximumStackedObservationDimension,
+                               kMaximumStackedObservationDimension>;
+using StackedJacobian =
+    Eigen::Matrix<double, kMaximumStackedObservationDimension,
+                  kWholeVehicleStateDimension>;
 
 // 单块装甲板在本次曝光时刻的量测。position_T_m 由 PnP 平移和同曝光
 // 坐标快照转换而来；yaw 必须来自独立约束重投影，不能使用 PnP rvec。
@@ -57,6 +66,10 @@ struct Measurement {
   double keypoint_quality = 1.0;
   double view_quality = 1.0;
   bool has_inward_yaw = false;
+  // Exposure-time camera geometry. R_TC maps camera vectors into tracker T.
+  Eigen::Matrix3d R_TC = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d camera_position_T_m = Eigen::Vector3d::Zero();
+  bool has_exposure_camera_geometry = false;
 };
 
 struct State {
@@ -109,11 +122,16 @@ enum class TrackingState {
 struct WholeVehicleEkfOptions {
   // 几何先验：首次只看到一块板时，中心只能由该半径反推。
   double radius_prior_m = 0.26;
-  double minimum_radius_m = 0.02;
+  double minimum_radius_m = 0.05;
+  double maximum_radius_m = 0.50;
+  double maximum_radius_difference_m = 0.12;
+  double maximum_height_difference_m = 0.20;
   // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
   double q_linear_acceleration = 4.0;
   double q_angular_acceleration = 16.0;
-  double q_geometry = 1e-4;
+  // Vehicle geometry is static during one track. It is updated only by a
+  // geometrically consistent multi-armor frame, not by process random walk.
+  double q_geometry = 0.0;
   // 基础观测标准差。R 会再按质量、重投影 RMS 和相机量测距离放大。
   double position_std_xy_m = 0.03;
   double position_std_z_m = 0.08;
@@ -121,6 +139,17 @@ struct WholeVehicleEkfOptions {
   double reprojection_rms_scale = 0.15;
   double range_noise_scale_per_m = 0.025;
   double minimum_quality = 0.05;
+  // Association uses yaw more permissively than the EKF update. A large but
+  // plausible phase residual may select a slot while remaining position-only.
+  double maximum_yaw_update_innovation_rad = 0.35;
+  double maximum_yaw_association_innovation_rad = 0.96;
+  double yaw_phase_cost_std_rad = 0.35;
+  double adjacent_slot_penalty = 0.5;
+  double opposite_slot_penalty = 4.0;
+  double minimum_visibility_cosine = -0.35;
+  // Geometry is observable only from distinct slots with consistent yaw.
+  double geometry_yaw_consistency_rad = 0.35;
+  double geometry_minimum_baseline_m = 0.08;
   // 3D/4D 卡方 NIS 门限，默认分别接近 95% 分位。
   double nis_gate_3d = 7.815;
   double nis_gate_4d = 9.488;
@@ -178,6 +207,7 @@ class WholeVehicleEkf {
     int armor_slot = -1;
     double nis = 0.0;
     bool includes_yaw = false;
+    double cost = 0.0;
     Matrix4 covariance = Matrix4::Zero();
   };
 
@@ -186,12 +216,27 @@ class WholeVehicleEkf {
   [[nodiscard]] Matrix4 measurementCovariance(
       const Measurement& measurement) const;
   [[nodiscard]] bool identityConsistent(const Measurement& measurement) const;
+  // Kept as a small single-candidate primitive for tests and diagnostics.
   [[nodiscard]] std::optional<Association> associate(
       const std::vector<Measurement>& measurements,
       const std::vector<bool>& used_measurements,
       const std::array<bool, kArmorSlotCount>& used_slots) const;
   [[nodiscard]] bool applyUpdate(const Measurement& measurement,
                                  const Association& association);
+  [[nodiscard]] bool slotVisible(const Measurement& measurement,
+                                 int armor_slot) const;
+  [[nodiscard]] double slotTransitionPenalty(int armor_slot) const;
+  [[nodiscard]] std::optional<Association> makeAssociationCandidate(
+      const std::vector<Measurement>& measurements, int measurement_index,
+      int armor_slot) const;
+  [[nodiscard]] std::vector<Association> associateAll(
+      const std::vector<Measurement>& measurements) const;
+  [[nodiscard]] bool geometryObservable(
+      const std::vector<Measurement>& measurements,
+      const std::vector<Association>& associations) const;
+  [[nodiscard]] bool applyJointUpdate(
+      const std::vector<Measurement>& measurements,
+      const std::vector<Association>& associations, bool update_geometry);
   [[nodiscard]] bool initialize(const Measurement& measurement);
   [[nodiscard]] bool stateFiniteAndPhysical() const;
   [[nodiscard]] TrackOutput makeOutput(
@@ -208,6 +253,7 @@ class WholeVehicleEkf {
   int consecutive_misses_ = 0;
   int tracked_color_id_ = -1;
   int tracked_number_id_ = -1;
+  std::array<bool, kArmorSlotCount> last_associated_slots_{};
 };
 
 [[nodiscard]] const char* trackingStateName(TrackingState state) noexcept;

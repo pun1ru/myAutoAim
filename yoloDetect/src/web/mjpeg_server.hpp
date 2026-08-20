@@ -73,6 +73,7 @@ struct WebTrackerMeasurementTelemetry {
   int color_id = -1;
   int number_id = -1;
   bool association_valid = false;
+  bool yaw_used = false;
   int associated_slot = -1;
   double nis = 0.0;
   double predicted_x_T_m = 0.0;

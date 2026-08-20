@@ -92,24 +92,34 @@ std::string htmlPage() {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YOLO Armor Debug</title>
 <style>
-  body { margin: 0; background: #15191d; color: #eef3f6; font-family: system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #15191d; color: #eef3f6; font-family: system-ui, sans-serif; overflow: hidden; }
   header { padding: 14px 18px; background: #20282e; border-bottom: 1px solid #39464f; }
   h1 { margin: 0; font-size: 18px; font-weight: 600; }
   h2 { margin: 0; font-size: 15px; font-weight: 600; }
-  main { padding: 16px; }
-  img { display: block; width: min(100%, 1400px); height: auto; background: #090b0d; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) clamp(560px, 44vw, 780px); height: calc(100vh - 50px); min-height: 0; }
+  .video-pane { min-width: 0; min-height: 0; display: grid; place-items: center; padding: 12px; background: #090b0d; }
+  .video-pane img { display: block; width: 100%; height: 100%; object-fit: contain; background: #090b0d; }
+  .debug-pane { min-width: 0; min-height: 0; overflow-y: auto; padding: 0 14px 18px; border-left: 1px solid #39464f; background: #171d21; scrollbar-gutter: stable; }
+  .debug-section { min-width: 0; border-bottom: 1px solid #39464f; padding-bottom: 10px; }
+  .debug-section.pose { height: 260px; }
+  .debug-section.predicted { height: 214px; }
+  .debug-section.state { height: 154px; }
+  .debug-section.observations { height: 292px; }
   p, #control-status, #pose-frame { color: #aab7c0; font-size: 14px; }
-  .pose-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; max-width: 1400px; margin-top: 18px; }
+  .pose-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 42px; padding-top: 12px; }
   .frame-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: #aab7c0; font-size: 14px; }
-  .pose-table-wrap { max-width: 1400px; overflow-x: auto; margin-top: 8px; border-top: 1px solid #39464f; border-bottom: 1px solid #39464f; }
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { padding: 9px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid #2b353c; font-size: 13px; }
+  .pose-table-wrap { height: calc(100% - 48px); overflow: auto; border-top: 1px solid #39464f; border-bottom: 1px solid #39464f; scrollbar-gutter: stable; }
+  table { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { height: 36px; padding: 7px 9px; text-align: right; white-space: nowrap; border-bottom: 1px solid #2b353c; font-size: 12px; }
+  th, td { min-width: 82px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  th:first-child, td:first-child { min-width: 64px; }
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:last-child, td:last-child { text-align: left; }
   th { color: #aab7c0; font-weight: 500; }
   tr.valid td { color: #d8f5e8; }
   tr.warning td { color: #f4d58b; }
   tr.invalid td { color: #efb6a8; }
-  .control-panel { max-width: 760px; margin: 16px 0; border-top: 1px solid #39464f; }
+  .control-panel { margin: 12px 0 0; border-top: 1px solid #39464f; }
   .control-row { display: grid; grid-template-columns: 126px repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid #2b353c; }
   .control-label { color: #aab7c0; font-size: 13px; }
   .spin-input { min-width: 0; width: 100%; box-sizing: border-box; min-height: 38px; border: 1px solid #52616b; border-radius: 4px; background: #1b2227; color: #eef3f6; font: inherit; padding: 0 10px; }
@@ -123,13 +133,20 @@ std::string htmlPage() {
   button:hover { background: #34434e; }
   button.scene { border-color: #2f9d76; }
   button.stop { border-color: #c65b56; }
+  @media (max-width: 1050px) {
+    body { overflow: auto; }
+    main { display: block; height: auto; }
+    .video-pane { height: min(62vh, 720px); }
+    .debug-pane { border-left: 0; border-top: 1px solid #39464f; overflow: visible; }
+  }
 </style>
 </head>
 <body>
 <header><h1>YOLO Armor Debug Stream</h1></header>
 <main>
-<img src="/stream.mjpg" alt="Waiting for detector frames">
-<section aria-labelledby="pose-title">
+<div class="video-pane"><img src="/stream.mjpg" alt="Waiting for detector frames"></div>
+<aside class="debug-pane" aria-label="Detector and EKF diagnostics">
+<section class="debug-section pose" aria-labelledby="pose-title">
   <div class="pose-heading">
     <h2 id="pose-title">Pose and Aim</h2>
     <div class="frame-meta">
@@ -145,7 +162,7 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
-<section aria-labelledby="ekf-title">
+<section class="debug-section predicted" aria-labelledby="ekf-title">
   <div class="pose-heading"><h2 id="ekf-title">EKF Predicted Armor Centers (T m)</h2></div>
   <div class="pose-table-wrap">
     <table>
@@ -154,7 +171,7 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
-<section aria-labelledby="ekf-state-title">
+<section class="debug-section state" aria-labelledby="ekf-state-title">
   <div class="pose-heading"><h2 id="ekf-state-title">EKF State (T)</h2></div>
   <div class="pose-table-wrap">
     <table>
@@ -163,12 +180,12 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
-<section aria-labelledby="ekf-observation-title">
+<section class="debug-section observations" aria-labelledby="ekf-observation-title">
   <div class="pose-heading"><h2 id="ekf-observation-title">EKF Measurements and Association (T)</h2></div>
   <div class="pose-table-wrap">
     <table>
-      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Inward yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
-      <tbody id="ekf-observation-rows"><tr><td colspan="24">No EKF measurements</td></tr></tbody>
+      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>Inward yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
+      <tbody id="ekf-observation-rows"><tr><td colspan="25">No EKF measurements</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -180,6 +197,7 @@ std::string htmlPage() {
   <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
 </section>
 <p id="control-status">Controls are sent to the detector command queue.</p>
+</aside>
 </main>
 <script>
 const controlStatus = document.getElementById('control-status');
@@ -352,6 +370,7 @@ async function refreshPose() {
       row.append(cell(metric(observation.z_T_m, 3)));
       row.append(cell(metric(observation.camera_range_m, 3)));
       row.append(cell(observation.has_inward_yaw ? 'yes' : 'no'));
+      row.append(cell(observation.yaw_used ? 'yes' : 'no'));
       row.append(cell(observation.has_inward_yaw ? metric(observation.inward_yaw_rad * 180 / Math.PI, 2) : '-'));
       row.append(cell(observation.has_inward_yaw ? metric(observation.yaw_std_rad * 180 / Math.PI, 2) : '-'));
       row.append(cell(metric(observation.reprojection_rms_px, 2)));
@@ -376,7 +395,7 @@ async function refreshPose() {
     if (observationRows.length === 0) {
       const row = document.createElement('tr');
       const empty = cell('No EKF measurements');
-      empty.colSpan = 24;
+      empty.colSpan = 25;
       row.append(empty);
       observationRows.push(row);
     }
@@ -591,6 +610,8 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << ",\"number_id\":" << measurement.number_id
            << ",\"association_valid\":"
            << (measurement.association_valid ? "true" : "false")
+           << ",\"yaw_used\":"
+           << (measurement.yaw_used ? "true" : "false")
            << ",\"associated_slot\":" << measurement.associated_slot
            << ",\"nis\":" << measurement.nis
            << ",\"predicted_x_T_m\":" << measurement.predicted_x_T_m

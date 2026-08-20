@@ -60,6 +60,14 @@ void testCameraToTrackerUsesMatchingExposure() {
               "camera plus y must become tracker minus z");
   requireNear(measurement->camera_range_m, std::sqrt(14.0), 1e-12,
               "measurement range must be measured from the camera center");
+  require(measurement->has_exposure_camera_geometry,
+          "measurement must retain exposure-time camera geometry");
+  requireNear(measurement->R_TC(0, 2), 1.0, 1e-12,
+              "camera depth axis must map into tracker forward axis");
+  requireNear(measurement->R_TC(1, 0), -1.0, 1e-12,
+              "camera right axis must map into tracker negative left axis");
+  requireNear(measurement->R_TC(2, 1), -1.0, 1e-12,
+              "camera down axis must map into tracker negative up axis");
   require(!measurement->has_inward_yaw,
           "adapter must not derive yaw from PnP Rodrigues components");
 }
