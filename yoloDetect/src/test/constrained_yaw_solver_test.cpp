@@ -64,15 +64,20 @@ std::array<cv::Point2f, yolo_detect::kArmorPointCount> imagePoints(
       rotationTrackerFromArmor(yaw_T_rad);
   cv::Mat rvec;
   cv::Rodrigues(R_CA, rvec);
-  std::vector<cv::Point2f> projected;
-  cv::projectPoints(yolo_detect::ArmorPoseEstimator::objectPoints(
-                        yolo_detect::ArmorSize::Small),
-                    rvec, center_camera_m, camera.camera_matrix,
+  const auto object_point_array =
+      yolo_detect::ArmorPoseEstimator::objectPoints(
+          yolo_detect::ArmorSize::Small);
+  const std::vector<cv::Point3d> object_points(object_point_array.begin(),
+                                                object_point_array.end());
+  std::vector<cv::Point2d> projected;
+  cv::projectPoints(object_points, rvec, center_camera_m, camera.camera_matrix,
                     camera.distortion_coefficients, projected);
   require(projected.size() == yolo_detect::kArmorPointCount,
           "must project all synthetic corners");
   std::array<cv::Point2f, yolo_detect::kArmorPointCount> result{};
-  std::copy(projected.begin(), projected.end(), result.begin());
+  for (std::size_t index = 0; index < result.size(); ++index) {
+    result[index] = cv::Point2f(projected[index]);
+  }
   return result;
 }
 

@@ -59,9 +59,12 @@ ProjectionEvaluation evaluateYaw(
 
   cv::Mat rvec;
   cv::Rodrigues(evaluation.rotation_camera_from_armor, rvec);
-  std::vector<cv::Point2f> projected;
-  cv::projectPoints(ArmorPoseEstimator::objectPoints(armor_size), rvec,
-                    center_camera_m, calibration.camera_matrix,
+  const auto object_point_array = ArmorPoseEstimator::objectPoints(armor_size);
+  const std::vector<cv::Point3d> object_points(object_point_array.begin(),
+                                                object_point_array.end());
+  std::vector<cv::Point2d> projected;
+  cv::projectPoints(object_points, rvec, center_camera_m,
+                    calibration.camera_matrix,
                     calibration.distortion_coefficients, projected);
   if (projected.size() != image_points.size()) return evaluation;
 
