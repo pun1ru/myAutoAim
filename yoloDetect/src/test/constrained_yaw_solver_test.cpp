@@ -118,12 +118,32 @@ void testRejectsInconsistentCorners() {
   require(!result.valid, "inconsistent corners must not produce reliable yaw");
 }
 
+void testRefinesPerturbedPnpCenter() {
+  const auto snapshot = exposureSnapshot();
+  const auto camera = calibration();
+  constexpr double kExpectedYaw = -0.28;
+  const cv::Vec3d true_center(0.03, -0.02, 5.0);
+  yolo_detect::PoseResult pose;
+  pose.valid = true;
+  pose.armor_size = yolo_detect::ArmorSize::Small;
+  pose.center_camera_m = true_center + cv::Vec3d(0.01, -0.01, 0.02);
+  const auto points = imagePoints(snapshot, camera, kExpectedYaw, true_center);
+
+  const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
+  const auto result = solver.solve(snapshot, pose, points);
+  require(result.valid,
+          "joint constrained fit must tolerate a small PnP center error");
+  require(std::abs(wrapToPi(result.inward_yaw_T_rad - kExpectedYaw)) < 1e-3,
+          "joint constrained fit must recover the correct yaw");
+}
+
 }  // namespace
 
 int main() {
   try {
     testRecoversYawWithoutPnpRotation();
     testRejectsInconsistentCorners();
+    testRefinesPerturbedPnpCenter();
     std::cout << "constrained yaw solver tests passed\n";
     return 0;
   } catch (const std::exception& error) {

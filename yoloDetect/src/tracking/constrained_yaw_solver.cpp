@@ -1,5 +1,7 @@
 #include "tracking/constrained_yaw_solver.hpp"
 
+#include <Eigen/Cholesky>
+#include <Eigen/Core>
 #include <opencv2/calib3d.hpp>
 
 #include <algorithm>
@@ -43,6 +45,7 @@ cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad) {
 struct ProjectionEvaluation {
   double squared_error_px = std::numeric_limits<double>::infinity();
   cv::Matx33d rotation_camera_from_armor = cv::Matx33d::eye();
+  std::array<cv::Point2d, kArmorPointCount> projected_points{};
 };
 
 ProjectionEvaluation evaluateYaw(
@@ -71,6 +74,7 @@ ProjectionEvaluation evaluateYaw(
   double squared_error = 0.0;
   for (std::size_t index = 0; index < image_points.size(); ++index) {
     if (!finite(projected[index])) return evaluation;
+    evaluation.projected_points[index] = projected[index];
     const double dx = static_cast<double>(projected[index].x) -
                       static_cast<double>(image_points[index].x);
     const double dy = static_cast<double>(projected[index].y) -
@@ -79,6 +83,55 @@ ProjectionEvaluation evaluateYaw(
   }
   evaluation.squared_error_px = squared_error;
   return evaluation;
+}
+
+using Residual8 = Eigen::Matrix<double, 8, 1>;
+using Jacobian8x4 = Eigen::Matrix<double, 8, 4>;
+using Matrix4 = Eigen::Matrix<double, 4, 4>;
+using Vector4 = Eigen::Matrix<double, 4, 1>;
+
+Residual8 residuals(const ProjectionEvaluation& evaluation,
+                    const std::array<cv::Point2f, kArmorPointCount>& points) {
+  Residual8 result;
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    result[2 * index] = evaluation.projected_points[index].x - points[index].x;
+    result[2 * index + 1] =
+        evaluation.projected_points[index].y - points[index].y;
+  }
+  return result;
+}
+
+bool finiteEigen(const Vector4& value) {
+  return value.array().isFinite().all();
+}
+
+Jacobian8x4 numericalJacobian(
+    double yaw, const cv::Vec3d& center_camera_m,
+    const ProjectionEvaluation& evaluation,
+    const cv::Matx33d& rotation_tracker_from_camera,
+    const CameraCalibration& calibration, ArmorSize armor_size,
+    const std::array<cv::Point2f, kArmorPointCount>& image_points) {
+  Jacobian8x4 jacobian;
+  constexpr double kPositionStepM = 1e-4;
+  constexpr double kYawStepRad = 1e-4;
+  for (int column = 0; column < 4; ++column) {
+    double perturbed_yaw = yaw;
+    cv::Vec3d perturbed_center = center_camera_m;
+    double step = kPositionStepM;
+    if (column == 3) {
+      perturbed_yaw += kYawStepRad;
+      step = kYawStepRad;
+    } else {
+      perturbed_center[column] += kPositionStepM;
+    }
+    const ProjectionEvaluation perturbed = evaluateYaw(
+        perturbed_yaw, rotation_tracker_from_camera, calibration, armor_size,
+        perturbed_center, image_points);
+    jacobian.col(column) =
+        (residuals(perturbed, image_points) - residuals(evaluation, image_points)) /
+        step;
+  }
+  return jacobian;
 }
 
 }  // namespace
@@ -97,6 +150,8 @@ const char* reliableYawStatusName(ReliableYawStatus status) noexcept {
       return "constrained yaw is ambiguous";
     case ReliableYawStatus::BackFacingArmor:
       return "constrained yaw puts armor back-facing the camera";
+    case ReliableYawStatus::CenterAdjustmentTooLarge:
+      return "constrained yaw requires an excessive center adjustment";
   }
   return "unknown reliable yaw status";
 }
@@ -109,9 +164,11 @@ ConstrainedYawSolver::ConstrainedYawSolver(CameraCalibration calibration,
       !finite(options_.max_reprojection_rms_px) ||
       !finite(options_.max_yaw_std_rad) || !finite(options_.min_facing_cosine) ||
       !finite(options_.min_opposite_margin_px) ||
+      !finite(options_.max_center_adjustment_m) ||
       options_.max_reprojection_rms_px <= 0.0 ||
       options_.max_yaw_std_rad <= 0.0 || options_.min_facing_cosine < -1.0 ||
-      options_.min_facing_cosine > 1.0 || options_.min_opposite_margin_px < 0.0) {
+      options_.min_facing_cosine > 1.0 || options_.min_opposite_margin_px < 0.0 ||
+      options_.max_center_adjustment_m <= 0.0) {
     throw std::invalid_argument("invalid constrained yaw solver configuration");
   }
 }
@@ -183,32 +240,73 @@ ReliableYaw ConstrainedYawSolver::solve(
   best_yaw = 0.5 * (lower + upper);
   best = evaluateYaw(best_yaw, rotation_tracker_from_camera, calibration_,
                      pose.armor_size, pose.center_camera_m, image_points);
+  cv::Vec3d refined_center_camera_m = pose.center_camera_m;
+  double damping = 1e-3;
+  for (int iteration = 0; iteration < 16; ++iteration) {
+    best = evaluateYaw(best_yaw, rotation_tracker_from_camera, calibration_,
+                       pose.armor_size, refined_center_camera_m, image_points);
+    if (!finite(best.squared_error_px)) return result;
+    const Residual8 residual = residuals(best, image_points);
+    const Jacobian8x4 jacobian = numericalJacobian(
+        best_yaw, refined_center_camera_m, best, rotation_tracker_from_camera,
+        calibration_, pose.armor_size, image_points);
+    const Matrix4 normal = jacobian.transpose() * jacobian;
+    const Vector4 gradient = jacobian.transpose() * residual;
+    Eigen::LDLT<Matrix4> factor(normal + damping * Matrix4::Identity());
+    if (factor.info() != Eigen::Success) break;
+    Vector4 delta = factor.solve(-gradient);
+    if (factor.info() != Eigen::Success || !finiteEigen(delta)) break;
+
+    const double position_step = delta.template head<3>().norm();
+    if (position_step > 0.05) delta.template head<3>() *= 0.05 / position_step;
+    delta[3] = std::clamp(delta[3], -0.15, 0.15);
+    const cv::Vec3d candidate_center = refined_center_camera_m +
+        cv::Vec3d(delta[0], delta[1], delta[2]);
+    if (!finite(candidate_center) || candidate_center[2] <= 0.0) break;
+    const ProjectionEvaluation candidate = evaluateYaw(
+        best_yaw + delta[3], rotation_tracker_from_camera, calibration_,
+        pose.armor_size, candidate_center, image_points);
+    if (candidate.squared_error_px < best.squared_error_px) {
+      best_yaw += delta[3];
+      refined_center_camera_m = candidate_center;
+      best = candidate;
+      damping = std::max(1e-7, damping * 0.3);
+      if (delta.norm() < 1e-6) break;
+    } else {
+      damping = std::min(1e8, damping * 10.0);
+    }
+  }
+  best = evaluateYaw(best_yaw, rotation_tracker_from_camera, calibration_,
+                     pose.armor_size, refined_center_camera_m, image_points);
+  if (!finite(best.squared_error_px)) return result;
   result.inward_yaw_T_rad = wrapToPi(best_yaw);
   result.reprojection_rms_px =
       std::sqrt(best.squared_error_px / (2.0 * image_points.size()));
+  if (cv::norm(refined_center_camera_m - pose.center_camera_m) >
+      options_.max_center_adjustment_m) {
+    result.status = ReliableYawStatus::CenterAdjustmentTooLarge;
+    return result;
+  }
   if (!finite(result.reprojection_rms_px) ||
       result.reprojection_rms_px > options_.max_reprojection_rms_px) {
     result.status = ReliableYawStatus::ReprojectionTooLarge;
     return result;
   }
 
-  const double finite_difference_rad = 0.005;
-  const double left_error = evaluateYaw(
-      best_yaw - finite_difference_rad, rotation_tracker_from_camera,
-      calibration_, pose.armor_size, pose.center_camera_m, image_points)
-                                .squared_error_px;
-  const double right_error = evaluateYaw(
-      best_yaw + finite_difference_rad, rotation_tracker_from_camera,
-      calibration_, pose.armor_size, pose.center_camera_m, image_points)
-                                 .squared_error_px;
-  const double information = (left_error - 2.0 * best.squared_error_px +
-                              right_error) /
-                             (2.0 * finite_difference_rad * finite_difference_rad);
-  if (!finite(information) || information <= 1e-9) {
+  const Jacobian8x4 final_jacobian = numericalJacobian(
+      best_yaw, refined_center_camera_m, best, rotation_tracker_from_camera,
+      calibration_, pose.armor_size, image_points);
+  Eigen::LDLT<Matrix4> final_factor(
+      final_jacobian.transpose() * final_jacobian);
+  Vector4 yaw_basis = Vector4::Zero();
+  yaw_basis[3] = 1.0;
+  const Vector4 yaw_covariance_column = final_factor.solve(yaw_basis);
+  if (final_factor.info() != Eigen::Success ||
+      !finiteEigen(yaw_covariance_column) || yaw_covariance_column[3] <= 0.0) {
     result.status = ReliableYawStatus::WeakYawInformation;
     return result;
   }
-  result.yaw_std_rad = std::sqrt(1.0 / information);
+  result.yaw_std_rad = std::sqrt(yaw_covariance_column[3]);
   if (!finite(result.yaw_std_rad) || result.yaw_std_rad > options_.max_yaw_std_rad) {
     result.status = ReliableYawStatus::WeakYawInformation;
     return result;
@@ -216,7 +314,7 @@ ReliableYaw ConstrainedYawSolver::solve(
 
   const ProjectionEvaluation opposite = evaluateYaw(
       best_yaw + kPi, rotation_tracker_from_camera, calibration_, pose.armor_size,
-      pose.center_camera_m, image_points);
+      refined_center_camera_m, image_points);
   const double opposite_rms = std::sqrt(
       opposite.squared_error_px / (2.0 * image_points.size()));
   if (!finite(opposite_rms) ||
@@ -229,8 +327,9 @@ ReliableYaw ConstrainedYawSolver::solve(
       best.rotation_camera_from_armor(0, 0),
       best.rotation_camera_from_armor(1, 0),
       best.rotation_camera_from_armor(2, 0));
-  const double range = cv::norm(pose.center_camera_m);
-  result.facing_cosine = outward_normal_camera.dot(-pose.center_camera_m) / range;
+  const double range = cv::norm(refined_center_camera_m);
+  result.facing_cosine =
+      outward_normal_camera.dot(-refined_center_camera_m) / range;
   if (!finite(result.facing_cosine) ||
       result.facing_cosine < options_.min_facing_cosine) {
     result.status = ReliableYawStatus::BackFacingArmor;

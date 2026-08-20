@@ -14,6 +14,7 @@ enum class ReliableYawStatus {
   WeakYawInformation,
   AmbiguousOrientation,
   BackFacingArmor,
+  CenterAdjustmentTooLarge,
 };
 
 struct ConstrainedYawOptions {
@@ -21,6 +22,7 @@ struct ConstrainedYawOptions {
   double max_yaw_std_rad = 0.12;
   double min_facing_cosine = 0.20;
   double min_opposite_margin_px = 0.50;
+  double max_center_adjustment_m = 0.25;
   int coarse_search_steps = 360;
 };
 
