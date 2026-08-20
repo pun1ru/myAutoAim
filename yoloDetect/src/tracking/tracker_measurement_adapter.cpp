@@ -46,6 +46,7 @@ std::optional<Measurement> makeTrackerMeasurement(
   if (reliable_yaw != nullptr) *reliable_yaw = yaw;
   if (yaw.valid) {
     measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;
+    measurement.yaw_std_rad = yaw.yaw_std_rad;
     measurement.has_inward_yaw = true;
     measurement.view_quality = std::clamp(yaw.facing_cosine, 0.05, 1.0);
   }

@@ -19,7 +19,7 @@ enum class ReliableYawStatus {
 
 struct ConstrainedYawOptions {
   double max_reprojection_rms_px = 2.0;
-  double max_yaw_std_rad = 0.12;
+  double max_yaw_std_rad = 0.35;
   double min_facing_cosine = 0.20;
   double min_opposite_margin_px = 0.50;
   double max_center_adjustment_m = 0.25;

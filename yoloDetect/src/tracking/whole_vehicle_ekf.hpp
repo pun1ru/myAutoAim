@@ -43,6 +43,9 @@ struct Measurement {
   std::uint64_t timestamp_ns = 0;
   Eigen::Vector3d position_T_m = Eigen::Vector3d::Zero();
   double inward_yaw_T_rad = 0.0;
+  // The constrained-reprojection yaw uncertainty, in radians. Zero selects
+  // the EKF's configured yaw standard deviation for synthetic observations.
+  double yaw_std_rad = 0.0;
   double reprojection_rms_px = 0.0;
   double confidence = 0.0;
   int color_id = -1;

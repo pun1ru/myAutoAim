@@ -184,7 +184,12 @@ Matrix4 WholeVehicleEkf::measurementCovariance(
   covariance(0, 0) = square(options_.position_std_xy_m * scale);
   covariance(1, 1) = square(options_.position_std_xy_m * scale);
   covariance(2, 2) = square(options_.position_std_z_m * scale);
-  covariance(3, 3) = square(options_.yaw_std_rad * scale);
+  double yaw_std = options_.yaw_std_rad * scale;
+  if (measurement.has_inward_yaw && finite(measurement.yaw_std_rad) &&
+      measurement.yaw_std_rad > 0.0) {
+    yaw_std = std::max(yaw_std, measurement.yaw_std_rad);
+  }
+  covariance(3, 3) = square(yaw_std);
   return covariance;
 }
 
