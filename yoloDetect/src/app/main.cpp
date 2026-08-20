@@ -1244,7 +1244,9 @@ int main(int argc, char** argv) {
               (reliable_yaws.empty() || reliable_yaws.front().valid
                    ? ""
                    : " (" + std::string(yolo_detect::tracking::reliableYawStatusName(
-                                  reliable_yaws.front().status)) + ")"),
+                                  reliable_yaws.front().status)) +
+                         " rms=" + fixed(
+                             reliable_yaws.front().reprojection_rms_px, 2) + ")"),
           8, tracker_output.has_state ? cv::Scalar(80, 255, 120)
                                       : cv::Scalar(80, 180, 255));
 
