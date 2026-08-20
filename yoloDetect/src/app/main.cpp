@@ -616,6 +616,16 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
         std::isfinite(yaw.reprojection_rms_px);
     telemetry.tracker_yaw_rms_px = yaw.reprojection_rms_px;
   }
+  if (tracker_output.has_state) {
+    telemetry.predicted_armors.reserve(tracker_output.predicted_armors.size());
+    for (const yolo_detect::tracking::DecodedArmor& armor :
+         tracker_output.predicted_armors) {
+      const Eigen::Vector3d& position = armor.position_T_m;
+      if (!position.array().isFinite().all()) continue;
+      telemetry.predicted_armors.push_back(
+          {armor.armor_slot, position.x(), position.y(), position.z()});
+    }
+  }
   telemetry.coordinate_valid = coordinate_snapshot.valid;
   telemetry.coordinate_status = coordinate_message;
   telemetry.camera_position_error_m =

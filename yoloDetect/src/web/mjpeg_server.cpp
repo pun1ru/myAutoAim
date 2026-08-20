@@ -145,6 +145,15 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
+<section aria-labelledby="ekf-title">
+  <div class="pose-heading"><h2 id="ekf-title">EKF Predicted Armor Centers (T m)</h2></div>
+  <div class="pose-table-wrap">
+    <table>
+      <thead><tr><th>Armor</th><th>T X m</th><th>T Y m</th><th>T Z m</th></tr></thead>
+      <tbody id="ekf-rows"><tr><td colspan="4">No active EKF state</td></tr></tbody>
+    </table>
+  </div>
+</section>
 <section class="control-panel" aria-label="Simulator controls">
   <div class="control-row"><span class="control-label">Scene</span><button class="scene" data-action="scene-shooting-range">Shooting Range</button><button class="scene" data-action="scene-energy">Energy</button><button data-action="reset">Reset Scene</button></div>
   <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
@@ -189,6 +198,7 @@ spinSpeedApply.addEventListener('click', () => {
 });
 
 const poseRows = document.getElementById('pose-rows');
+const ekfRows = document.getElementById('ekf-rows');
 const poseFrame = document.getElementById('pose-frame');
 const coordinateState = document.getElementById('coordinate-state');
 const trackerState = document.getElementById('tracker-state');
@@ -265,6 +275,24 @@ async function refreshPose() {
       rows.push(row);
     }
     poseRows.replaceChildren(...rows);
+    const predictedRows = [];
+    for (const armor of state.predicted_armors || []) {
+      const row = document.createElement('tr');
+      row.className = 'valid';
+      row.append(cell('E' + armor.armor_slot));
+      row.append(cell(metric(armor.x_T_m, 3)));
+      row.append(cell(metric(armor.y_T_m, 3)));
+      row.append(cell(metric(armor.z_T_m, 3)));
+      predictedRows.push(row);
+    }
+    if (predictedRows.length === 0) {
+      const row = document.createElement('tr');
+      const empty = cell('No active EKF state');
+      empty.colSpan = 4;
+      row.append(empty);
+      predictedRows.push(row);
+    }
+    ekfRows.replaceChildren(...predictedRows);
   } catch (_) {
   }
 }
@@ -389,7 +417,18 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
               "\"static_target_odom_y_m\":null,"
               "\"static_target_odom_z_m\":null";
   }
-  stream << ",\"poses\":[";
+  stream << ",\"predicted_armors\":[";
+  for (std::size_t index = 0; index < telemetry.predicted_armors.size();
+       ++index) {
+    if (index != 0) stream << ',';
+    const WebPredictedArmorTelemetry& armor =
+        telemetry.predicted_armors[index];
+    stream << "{\"armor_slot\":" << armor.armor_slot
+           << ",\"x_T_m\":" << armor.x_T_m
+           << ",\"y_T_m\":" << armor.y_T_m
+           << ",\"z_T_m\":" << armor.z_T_m << '}';
+  }
+  stream << "],\"poses\":[";
   for (std::size_t index = 0; index < telemetry.poses.size(); ++index) {
     if (index != 0) stream << ',';
     const WebPoseTelemetry& pose = telemetry.poses[index];

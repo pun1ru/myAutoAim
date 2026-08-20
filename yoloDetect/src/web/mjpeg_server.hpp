@@ -49,6 +49,13 @@ struct WebPoseTelemetry {
   double prediction_horizon_s = 0.0;
 };
 
+struct WebPredictedArmorTelemetry {
+  int armor_slot = -1;
+  double x_T_m = 0.0;
+  double y_T_m = 0.0;
+  double z_T_m = 0.0;
+};
+
 struct WebFrameTelemetry {
   std::uint64_t source_sequence = 0;
   std::string scene;
@@ -76,6 +83,7 @@ struct WebFrameTelemetry {
   double static_target_odom_z_m = 0.0;
   std::uint64_t last_gimbal_command_id = 0;
   bool last_command_fired = false;
+  std::vector<WebPredictedArmorTelemetry> predicted_armors;
   std::vector<WebPoseTelemetry> poses;
 };
 
