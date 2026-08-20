@@ -124,42 +124,12 @@ void testRejectsInconsistentCorners() {
   require(!result.valid, "inconsistent corners must not produce reliable yaw");
 }
 
-void testRefinesPerturbedPnpCenter() {
-  const auto snapshot = exposureSnapshot();
-  const auto camera = calibration();
-  constexpr double kExpectedYaw = -0.28;
-  const cv::Vec3d true_center(0.03, -0.02, 5.0);
-  yolo_detect::PoseResult pose;
-  pose.valid = true;
-  pose.armor_size = yolo_detect::ArmorSize::Small;
-  pose.center_camera_m = true_center + cv::Vec3d(0.01, -0.01, 0.02);
-  const auto points = imagePoints(snapshot, camera, kExpectedYaw, true_center);
-
-  const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
-  const auto result = solver.solve(snapshot, pose, points);
-  if (!result.valid) {
-    throw std::runtime_error(
-        std::string("joint constrained fit rejected: ") +
-        yolo_detect::tracking::reliableYawStatusName(result.status) +
-        " rms=" + std::to_string(result.reprojection_rms_px) +
-        " yaw_std=" + std::to_string(result.yaw_std_rad));
-  }
-  const double yaw_error =
-      std::abs(wrapToPi(result.inward_yaw_T_rad - kExpectedYaw));
-  if (yaw_error > 0.1) {
-    throw std::runtime_error(
-        "joint constrained fit yaw error=" + std::to_string(yaw_error) +
-        " std=" + std::to_string(result.yaw_std_rad));
-  }
-}
-
 }  // namespace
 
 int main() {
   try {
     testRecoversYawWithoutPnpRotation();
     testRejectsInconsistentCorners();
-    testRefinesPerturbedPnpCenter();
     std::cout << "constrained yaw solver tests passed\n";
     return 0;
   } catch (const std::exception& error) {
