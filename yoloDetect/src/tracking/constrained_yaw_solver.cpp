@@ -57,7 +57,7 @@ ProjectionEvaluation evaluateYaw(
       rotation_camera_from_tracker *
       rotationTrackerFromArmor(inward_yaw_T_rad);
 
-  cv::Vec3d rvec;
+  cv::Mat rvec;
   cv::Rodrigues(evaluation.rotation_camera_from_armor, rvec);
   std::vector<cv::Point2f> projected;
   cv::projectPoints(ArmorPoseEstimator::objectPoints(armor_size), rvec,

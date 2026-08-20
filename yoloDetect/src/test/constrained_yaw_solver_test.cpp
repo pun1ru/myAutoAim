@@ -62,7 +62,7 @@ std::array<cv::Point2f, yolo_detect::kArmorPointCount> imagePoints(
   const cv::Matx33d R_CA =
       yolo_detect::coordinates::cameraRotationOdom(snapshot).t() *
       rotationTrackerFromArmor(yaw_T_rad);
-  cv::Vec3d rvec;
+  cv::Mat rvec;
   cv::Rodrigues(R_CA, rvec);
   std::vector<cv::Point2f> projected;
   cv::projectPoints(yolo_detect::ArmorPoseEstimator::objectPoints(
