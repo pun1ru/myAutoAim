@@ -20,6 +20,7 @@ bool validSlot(int armor_slot) {
 
 bool validMeasurement(const Measurement& measurement) {
   return measurement.timestamp_ns != 0 && measurement.position_T_m.allFinite() &&
+         finite(measurement.camera_range_m) && measurement.camera_range_m > 0.0 &&
          finite(measurement.reprojection_rms_px) &&
          finite(measurement.confidence) && finite(measurement.keypoint_quality) &&
          finite(measurement.view_quality) &&
@@ -175,7 +176,7 @@ Matrix4 WholeVehicleEkf::measurementCovariance(
   const double keypoint_quality =
       std::max(options_.minimum_quality, measurement.keypoint_quality);
   const double view_quality = std::max(options_.minimum_quality, measurement.view_quality);
-  const double range_m = measurement.position_T_m.norm();
+  const double range_m = measurement.camera_range_m;
   const double scale =
       (1.0 + options_.reprojection_rms_scale * std::max(0.0, measurement.reprojection_rms_px)) *
       (1.0 + options_.range_noise_scale_per_m * range_m) /

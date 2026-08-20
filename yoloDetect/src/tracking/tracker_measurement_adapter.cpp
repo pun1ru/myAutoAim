@@ -34,6 +34,10 @@ std::optional<Measurement> makeTrackerMeasurement(
       exposure_snapshot, pose.center_camera_m);
   measurement.position_T_m = Eigen::Vector3d(
       tracker_position[0], tracker_position[1], tracker_position[2]);
+  measurement.camera_range_m = cv::norm(pose.center_camera_m);
+  if (!finite(measurement.camera_range_m) || measurement.camera_range_m <= 0.0) {
+    return std::nullopt;
+  }
   measurement.reprojection_rms_px = pose.reprojection_rms_px;
   measurement.confidence = detection.confidence;
   measurement.color_id = detection.color_id;

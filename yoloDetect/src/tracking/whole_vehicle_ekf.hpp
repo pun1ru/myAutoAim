@@ -42,6 +42,9 @@ using Jacobian = Eigen::Matrix<double, kArmorObservationDimension,
 struct Measurement {
   std::uint64_t timestamp_ns = 0;
   Eigen::Vector3d position_T_m = Eigen::Vector3d::Zero();
+  // Euclidean distance from the exposure-time camera center to this armor,
+  // measured in the OpenCV camera frame. It is not a T/odom-origin norm.
+  double camera_range_m = 0.0;
   double inward_yaw_T_rad = 0.0;
   // The constrained-reprojection yaw uncertainty, in radians. Zero selects
   // the EKF's configured yaw standard deviation for synthetic observations.

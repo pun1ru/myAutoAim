@@ -58,6 +58,8 @@ void testCameraToTrackerUsesMatchingExposure() {
               "camera plus x must become tracker minus y");
   requireNear(measurement->position_T_m.z(), -2.0, 1e-12,
               "camera plus y must become tracker minus z");
+  requireNear(measurement->camera_range_m, std::sqrt(14.0), 1e-12,
+              "measurement range must be measured from the camera center");
   require(!measurement->has_inward_yaw,
           "adapter must not derive yaw from PnP Rodrigues components");
 }

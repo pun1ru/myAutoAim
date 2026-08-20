@@ -40,6 +40,7 @@ tracking::Measurement observationAt(const tracking::State& state, int slot,
   tracking::Measurement measurement;
   measurement.timestamp_ns = timestamp_ns;
   measurement.position_T_m = predicted.position_T_m;
+  measurement.camera_range_m = 5.0;
   measurement.inward_yaw_T_rad = predicted.inward_yaw_T_rad;
   measurement.reprojection_rms_px = 0.2;
   measurement.confidence = 0.99;
