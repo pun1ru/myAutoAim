@@ -30,13 +30,15 @@ double wrapToPi(double angle) {
 cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad) {
   const double c = std::cos(inward_yaw_T_rad);
   const double s = std::sin(inward_yaw_T_rad);
-  const cv::Vec3d x_out_T(-c, -s, 0.0);
+  // ArmorPoseEstimator's right-handed point convention has +x_A point
+  // inward. Its +y_A is the visual left direction and +z_A is up.
+  const cv::Vec3d x_in_T(c, s, 0.0);
   const cv::Vec3d z_up_T(0.0, 0.0, 1.0);
-  const cv::Vec3d y_left_T = z_up_T.cross(x_out_T);
+  const cv::Vec3d y_left_T = z_up_T.cross(x_in_T);
   return {
-      x_out_T[0], y_left_T[0], z_up_T[0],
-      x_out_T[1], y_left_T[1], z_up_T[1],
-      x_out_T[2], y_left_T[2], z_up_T[2],
+      x_in_T[0], y_left_T[0], z_up_T[0],
+      x_in_T[1], y_left_T[1], z_up_T[1],
+      x_in_T[2], y_left_T[2], z_up_T[2],
   };
 }
 
@@ -229,9 +231,9 @@ ReliableYaw ConstrainedYawSolver::solve(
   }
 
   const cv::Vec3d outward_normal_camera(
-      best.rotation_camera_from_armor(0, 0),
-      best.rotation_camera_from_armor(1, 0),
-      best.rotation_camera_from_armor(2, 0));
+      -best.rotation_camera_from_armor(0, 0),
+      -best.rotation_camera_from_armor(1, 0),
+      -best.rotation_camera_from_armor(2, 0));
   const double range = cv::norm(refined_center_camera_m);
   result.facing_cosine =
       outward_normal_camera.dot(-refined_center_camera_m) / range;

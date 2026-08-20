@@ -22,13 +22,13 @@ double wrapToPi(double angle) {
 cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad) {
   const double c = std::cos(inward_yaw_T_rad);
   const double s = std::sin(inward_yaw_T_rad);
-  const cv::Vec3d x_out_T(-c, -s, 0.0);
+  const cv::Vec3d x_in_T(c, s, 0.0);
   const cv::Vec3d z_up_T(0.0, 0.0, 1.0);
-  const cv::Vec3d y_left_T = z_up_T.cross(x_out_T);
+  const cv::Vec3d y_left_T = z_up_T.cross(x_in_T);
   return {
-      x_out_T[0], y_left_T[0], z_up_T[0],
-      x_out_T[1], y_left_T[1], z_up_T[1],
-      x_out_T[2], y_left_T[2], z_up_T[2],
+      x_in_T[0], y_left_T[0], z_up_T[0],
+      x_in_T[1], y_left_T[1], z_up_T[1],
+      x_in_T[2], y_left_T[2], z_up_T[2],
   };
 }
 
