@@ -28,8 +28,10 @@ std::optional<Measurement> makeTrackerMeasurement(
   }
   Measurement measurement;
   measurement.timestamp_ns = frame.capture_timestamp_ns;
-  measurement.position_T_m = coordinates::cameraPointToTracker(
+  const cv::Vec3d tracker_position = coordinates::cameraPointToTracker(
       exposure_snapshot, pose.center_camera_m);
+  measurement.position_T_m = Eigen::Vector3d(
+      tracker_position[0], tracker_position[1], tracker_position[2]);
   measurement.reprojection_rms_px = pose.reprojection_rms_px;
   measurement.confidence = detection.confidence;
   measurement.color_id = detection.color_id;
