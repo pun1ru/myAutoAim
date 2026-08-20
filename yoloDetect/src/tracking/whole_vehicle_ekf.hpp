@@ -142,7 +142,7 @@ struct WholeVehicleEkfOptions {
   // Association uses yaw more permissively than the EKF update. A large but
   // plausible phase residual may select a slot while remaining position-only.
   double maximum_yaw_update_innovation_rad = 0.35;
-  double maximum_yaw_association_innovation_rad = 0.96;
+  double maximum_yaw_association_innovation_rad = 1.40;
   double yaw_phase_cost_std_rad = 0.35;
   double adjacent_slot_penalty = 0.5;
   double opposite_slot_penalty = 4.0;

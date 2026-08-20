@@ -2,6 +2,7 @@
 
 #include <Eigen/Eigenvalues>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -248,6 +249,41 @@ void testLargeYawResidualBecomesPositionOnly() {
               "position-only zero residual must not pull theta");
 }
 
+void testSecondArmorWithPoorYawStillUsesPosition() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 0.0;
+  truth.x[tracking::VelocityY] = 0.0;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.0;
+  const std::uint64_t timestamp_ns = 2'850'000'000ULL;
+  tracking::Measurement slot_zero =
+      observationAt(truth, 0, timestamp_ns);
+  tracking::Measurement slot_one =
+      observationAt(truth, 1, timestamp_ns);
+  slot_one.inward_yaw_T_rad -= 1.15;
+  const tracking::TrackOutput output =
+      ekf.update(timestamp_ns, {slot_zero, slot_one});
+  require(output.associated_observations.size() == 2,
+          "poor second-board yaw must not discard its position");
+  const auto second = std::find_if(
+      output.associated_observations.begin(),
+      output.associated_observations.end(),
+      [](const tracking::AssociatedObservation& association) {
+        return association.measurement_index == 1;
+      });
+  require(second != output.associated_observations.end() &&
+              second->armor_slot == 1 && !second->includes_yaw,
+          "poor yaw must select the adjacent slot as position-only");
+  requireNear(output.radius_even_m, options.radius_prior_m, 1e-12,
+              "position-only pair must keep geometry frozen");
+}
+
 void testJointUpdateIndependentOfDetectionOrder() {
   tracking::WholeVehicleEkfOptions options;
   options.confirming_hits = 1;
@@ -396,6 +432,7 @@ int main() {
     testTwoVisibleArmorsUpdateOneFrame();
     testSingleArmorDoesNotChangeGeometry();
     testLargeYawResidualBecomesPositionOnly();
+    testSecondArmorWithPoorYawStillUsesPosition();
     testJointUpdateIndependentOfDetectionOrder();
     testRotatingSlotSequenceKeepsCenterStable();
     testLostPredictionAndReset();
