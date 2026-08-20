@@ -137,8 +137,13 @@ void testRefinesPerturbedPnpCenter() {
 
   const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
   const auto result = solver.solve(snapshot, pose, points);
-  require(result.valid,
-          "joint constrained fit must tolerate a small PnP center error");
+  if (!result.valid) {
+    throw std::runtime_error(
+        std::string("joint constrained fit rejected: ") +
+        yolo_detect::tracking::reliableYawStatusName(result.status) +
+        " rms=" + std::to_string(result.reprojection_rms_px) +
+        " yaw_std=" + std::to_string(result.yaw_std_rad));
+  }
   require(std::abs(wrapToPi(result.inward_yaw_T_rad - kExpectedYaw)) < 1e-3,
           "joint constrained fit must recover the correct yaw");
 }
