@@ -86,7 +86,7 @@ bool sendText(Socket socket, const std::string& response) {
 // 构建根路径返回的独立浏览器界面。
 std::string htmlPage() {
   return R"(<!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -109,8 +109,12 @@ std::string htmlPage() {
   tr.valid td { color: #d8f5e8; }
   tr.warning td { color: #f4d58b; }
   tr.invalid td { color: #efb6a8; }
-  .controls { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); max-width: 760px; margin: 16px 0; }
-  .aim-controls { max-width: 520px; }
+  .control-panel { max-width: 760px; margin: 16px 0; border-top: 1px solid #39464f; }
+  .control-row { display: grid; grid-template-columns: 126px repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid #2b353c; }
+  .control-label { color: #aab7c0; font-size: 13px; }
+  .spin-input { min-width: 0; width: 100%; box-sizing: border-box; min-height: 38px; border: 1px solid #52616b; border-radius: 4px; background: #1b2227; color: #eef3f6; font: inherit; padding: 0 10px; }
+  .spin-input:focus { outline: 2px solid #2f9d76; outline-offset: 1px; }
+  @media (max-width: 560px) { .control-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .control-row > .control-label:first-child { grid-column: 1 / -1; } }
   .gimbal-state { grid-column: 1 / -1; color: #aab7c0; font-size: 13px; }
   button.follow { border-color: #d8a43a; }
   button.follow.active { background: #66511e; border-color: #f0c75e; }
@@ -140,21 +144,12 @@ std::string htmlPage() {
     </table>
   </div>
 </section>
-<section class="controls aim-controls" aria-label="Aim controls">
-  <button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button>
-  <button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button>
-  <span id="gimbal-state" class="gimbal-state">Gimbal idle</span>
-</section>
-<section class="controls" aria-label="Simulator controls">
-  <button class="scene" data-action="scene-shooting-range">Shooting Range</button>
-  <button class="scene" data-action="scene-energy">Energy</button>
-  <button data-action="reset">Reset Scene</button>
-  <button class="stop" data-action="motion-stop">Stop Vehicle</button>
-  <button data-action="motion-linear">Linear</button>
-  <button data-action="motion-spin">Spin</button>
-  <button data-action="motion-linear-spin">Linear + Spin</button>
-  <button data-action="speed-down">Speed -</button>
-  <button data-action="speed-up">Speed +</button>
+<section class="control-panel" aria-label="Simulator controls">
+  <div class="control-row"><span class="control-label">Scene</span><button class="scene" data-action="scene-shooting-range">Shooting Range</button><button class="scene" data-action="scene-energy">Energy</button><button data-action="reset">Reset Scene</button></div>
+  <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
+  <div class="control-row"><span class="control-label">Linear speed</span><button data-action="speed-down">Speed -</button><button data-action="speed-up">Speed +</button><span id="linear-speed-state" class="control-label">0.00 m/s</span></div>
+  <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
+  <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
 </section>
 <p id="control-status">Controls are sent to the detector command queue.</p>
 </main>
@@ -163,22 +158,34 @@ const controlStatus = document.getElementById('control-status');
 const followButton = document.getElementById('follow-button');
 const fireButton = document.getElementById('fire-button');
 const gimbalState = document.getElementById('gimbal-state');
-for (const button of document.querySelectorAll('[data-action]')) {
-  button.addEventListener('click', async () => {
-    const action = button.dataset.action;
-    button.disabled = true;
-    controlStatus.textContent = 'Sending ' + action + '...';
-    try {
-      const response = await fetch('/api/control?action=' + encodeURIComponent(action), { cache: 'no-store' });
-      const result = await response.json();
-      controlStatus.textContent = result.message;
-    } catch (_) {
-      controlStatus.textContent = 'Control request failed.';
-    } finally {
-      button.disabled = false;
-    }
-  });
+const linearSpeedState = document.getElementById('linear-speed-state');
+const spinSpeedInput = document.getElementById('spin-speed');
+const spinSpeedState = document.getElementById('spin-speed-state');
+const spinSpeedApply = document.getElementById('spin-speed-apply');
+async function sendControl(action, button) {
+  if (button) button.disabled = true;
+  controlStatus.textContent = 'Sending ' + action + '...';
+  try {
+    const response = await fetch('/api/control?action=' + encodeURIComponent(action), { cache: 'no-store' });
+    const result = await response.json();
+    controlStatus.textContent = result.message;
+  } catch (_) {
+    controlStatus.textContent = 'Control request failed.';
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
+for (const button of document.querySelectorAll('[data-action]')) {
+  button.addEventListener('click', () => sendControl(button.dataset.action, button));
+}
+spinSpeedApply.addEventListener('click', () => {
+  const speed = Number(spinSpeedInput.value);
+  if (!Number.isFinite(speed) || speed < 0 || speed > 720) {
+    controlStatus.textContent = 'Spin speed must be between 0 and 720 deg/s.';
+    return;
+  }
+  sendControl('spin-speed:' + speed, spinSpeedApply);
+});
 
 const poseRows = document.getElementById('pose-rows');
 const poseFrame = document.getElementById('pose-frame');
@@ -210,6 +217,11 @@ async function refreshPose() {
         metric(state.static_target_odom_z_m, 3) + ')'
       : '';
     gimbalState.textContent = state.gimbal_status + staticTarget;
+    linearSpeedState.textContent = metric(state.vehicle_speed_mps, 2) + ' m/s';
+    spinSpeedState.textContent = metric(state.spin_speed_deg_s, 1) + ' deg/s';
+    if (document.activeElement !== spinSpeedInput) {
+      spinSpeedInput.value = metric(state.spin_speed_deg_s, 1);
+    }
     const rows = [];
     for (const pose of state.poses) {
       const row = document.createElement('tr');
@@ -311,6 +323,10 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
       std::isfinite(telemetry.static_target_odom_z_m);
   stream << std::setprecision(8) << "{\"source_sequence\":"
          << telemetry.source_sequence
+         << ",\"scene\":\"" << jsonEscape(telemetry.scene)
+         << "\",\"motion\":\"" << jsonEscape(telemetry.motion)
+         << "\",\"vehicle_speed_mps\":" << telemetry.vehicle_speed_mps
+         << ",\"spin_speed_deg_s\":" << telemetry.spin_speed_deg_s
          << ",\"coordinate_valid\":"
          << (coordinate_metrics_valid ? "true" : "false")
          << ",\"coordinate_status\":\""

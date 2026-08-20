@@ -3,6 +3,8 @@
 #include "coordinates/simulator_pose_adapter.hpp"
 #include "detection/yolo_pose_detector.hpp"
 #include "pose/armor_pose_estimator.hpp"
+#include "tracking/tracker_measurement_adapter.hpp"
+#include "tracking/whole_vehicle_ekf.hpp"
 #include "web/mjpeg_server.hpp"
 
 #include <daedalus_sim_sdk/scene_control_client.hpp>
@@ -50,7 +52,7 @@ struct Options {
   std::uint16_t control_port = daedalus_sdk::kUdpSceneControlPort;
   std::uint16_t gimbal_port = daedalus_sdk::kUdpCommandPort;
   std::filesystem::path model;
-  float confidence = 0.01F;
+  float confidence = 0.70F;
   float keypoint_confidence = 0.25F;
   yolo_detect::ArmorSize armor_size = yolo_detect::ArmorSize::Small;
   float nms = 0.45F;
@@ -103,7 +105,7 @@ std::filesystem::path defaultModelPath(const char* executable) {
   std::error_code error;
   std::filesystem::path path = std::filesystem::absolute(executable, error);
   if (error) path = executable;
-  return path.parent_path() / "armor_pose_0815_640.onnx";
+  return path.parent_path() / "szu_best2_sim_416.onnx";
 }
 
 // 返回 Daedalus 1.3.1 固定分辨率对应的相机标定参数。
@@ -122,16 +124,16 @@ void printUsage() {
   std::cout
       << "Daedalus YOLO armor pose detector\n\n"
       << "Usage: yolo_detect [options]\n"
-      << "  --model <path>       ONNX model (default: armor_pose_0815_640)\n"
+      << "  --model <path>       ONNX model (default: szu_best2_sim_416)\n"
       << "  --host <address>     SDK image host (default: 127.0.0.1)\n"
       << "  --port <port>        SDK image port (default: 5602)\n"
       << "  --control-port <port> Scene control UDP port (default: 5603)\n"
       << "  --gimbal-port <port> Gimbal/fire UDP port (default: 5601)\n"
-      << "  --conf <0..1>        Object confidence (default: 0.01 for 0815)\n"
+      << "  --conf <0..1>        Object confidence (default: 0.70 for SZU model)\n"
       << "  --kpt-conf <0..1>    Point/PnP confidence (default: 0.25)\n"
       << "  --armor-size <name>  PnP plate model: small or large (default: small)\n"
       << "  --nms <0..1>         NMS IoU threshold (default: 0.45)\n"
-      << "  --imgsz <pixels>     Square model input size (default: 640)\n"
+      << "  --imgsz <pixels>     Square model input size (default: 416)\n"
       << "  --width <pixels>     Display width (default: 1100)\n"
       << "  --web <port>         Serve annotated MJPEG frames over HTTP\n"
       << "  --web-bind <address> Web bind address (default: 127.0.0.1)\n"
@@ -179,10 +181,16 @@ float parseUnitFloat(const std::string& value, const char* name) {
   return parsed;
 }
 
+bool hasPrefix(std::string_view value, std::string_view prefix) {
+  return value.size() >= prefix.size() &&
+         value.substr(0, prefix.size()) == prefix;
+}
+
 // 解析并校验全部命令行选项。
 Options parseOptions(int argc, char** argv) {
   Options options;
   options.model = defaultModelPath(argv[0]);
+  options.input_size = 416;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--help" || argument == "-h") {
@@ -533,6 +541,48 @@ void drawDetection(cv::Mat& image,
   }
 }
 
+// Projects whole-vehicle EKF armor-center predictions using the same exposure
+// snapshot that produced the current image frame.
+void drawPredictedArmorCenters(
+    cv::Mat& image, const yolo_detect::tracking::TrackOutput& tracker_output,
+    const yolo_detect::coordinates::CoordinateSnapshot& exposure_snapshot,
+    const yolo_detect::CameraCalibration& calibration) {
+  if (!tracker_output.has_state || !exposure_snapshot.valid) return;
+  const cv::Matx33d R_CO =
+      yolo_detect::coordinates::cameraRotationOdom(exposure_snapshot).t();
+  for (const yolo_detect::tracking::DecodedArmor& armor :
+       tracker_output.predicted_armors) {
+    const cv::Vec3d point_tracker(armor.position_T_m.x(),
+                                  armor.position_T_m.y(),
+                                  armor.position_T_m.z());
+    const cv::Vec3d point_camera = R_CO *
+        (point_tracker - exposure_snapshot.camera_position_odom_m);
+    if (!std::isfinite(point_camera[0]) || !std::isfinite(point_camera[1]) ||
+        !std::isfinite(point_camera[2]) || point_camera[2] <= 0.0) {
+      continue;
+    }
+    std::vector<cv::Point2d> projected;
+    cv::projectPoints(std::vector<cv::Point3d>{
+                          {point_camera[0], point_camera[1], point_camera[2]}},
+                      cv::Vec3d(0.0, 0.0, 0.0), cv::Vec3d(0.0, 0.0, 0.0),
+                      calibration.camera_matrix,
+                      calibration.distortion_coefficients, projected);
+    if (projected.size() != 1 || !std::isfinite(projected[0].x) ||
+        !std::isfinite(projected[0].y) || projected[0].x < 0.0 ||
+        projected[0].y < 0.0 || projected[0].x >= image.cols ||
+        projected[0].y >= image.rows) {
+      continue;
+    }
+    const cv::Point center(cvRound(projected[0].x), cvRound(projected[0].y));
+    cv::circle(image, center, 7, cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA);
+    cv::circle(image, center, 5, cv::Scalar(0, 255, 255), cv::FILLED,
+               cv::LINE_AA);
+    cv::putText(image, "E" + std::to_string(armor.armor_slot),
+                center + cv::Point(7, -7), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+  }
+}
+
 // 将本帧的位姿、坐标和控制器状态组装为网页遥测。
 yolo_detect::WebFrameTelemetry makeWebTelemetry(
     std::uint64_t source_sequence,
@@ -540,9 +590,14 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const std::vector<DetectionAim>& detection_aims,
     const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
     const std::string& coordinate_message,
-    const yolo_detect::control::StaticTargetController& gimbal_control) {
+    const yolo_detect::control::StaticTargetController& gimbal_control,
+    const SceneState& scene_state) {
   yolo_detect::WebFrameTelemetry telemetry;
   telemetry.source_sequence = source_sequence;
+  telemetry.scene = scene_state.scene;
+  telemetry.motion = motionName(scene_state.motion);
+  telemetry.vehicle_speed_mps = scene_state.vehicle_speed;
+  telemetry.spin_speed_deg_s = scene_state.spin_speed_deg_s;
   telemetry.coordinate_valid = coordinate_snapshot.valid;
   telemetry.coordinate_status = coordinate_message;
   telemetry.camera_position_error_m =
@@ -658,6 +713,7 @@ int main(int argc, char** argv) {
       simulatorCameraCalibration();
   const yolo_detect::ArmorPoseEstimator pose_estimator(camera_calibration);
   const yolo_detect::control::GimbalAimSolver aim_solver;
+  yolo_detect::tracking::WholeVehicleEkf whole_vehicle_tracker;
   yolo_detect::coordinates::SimulatorPoseAdapter simulator_pose;
   std::string coordinate_message =
       "coordinate transform disabled: provide --ipc-dir";
@@ -816,8 +872,11 @@ int main(int argc, char** argv) {
         "scene-shooting-range", "scene-energy", "reset", "motion-stop",
         "motion-linear", "motion-spin", "motion-linear-spin", "speed-down",
         "speed-up", "gimbal-follow-toggle", "gimbal-fire"};
+    const std::string_view spin_speed_prefix = "spin-speed:";
+    const bool is_spin_speed = hasPrefix(action, spin_speed_prefix);
     if (std::find(kKnownActions.begin(), kKnownActions.end(), action) ==
-        kKnownActions.end()) {
+            kKnownActions.end() &&
+        !is_spin_speed) {
       return false;
     }
     std::lock_guard<std::mutex> lock(web_command_mutex);
@@ -855,6 +914,23 @@ int main(int argc, char** argv) {
         adjustVehicleSpeed(-options.speed_step);
       } else if (action == "speed-up") {
         adjustVehicleSpeed(options.speed_step);
+      } else if (hasPrefix(action, "spin-speed:")) {
+        try {
+          const std::string value = action.substr(std::string("spin-speed:").size());
+          std::size_t parsed = 0;
+          const float speed = std::stof(value, &parsed);
+          if (parsed != value.size() || !std::isfinite(speed) || speed < 0.0F ||
+              speed > 720.0F) {
+            throw std::runtime_error("spin speed out of range");
+          }
+          SceneState next = scene_state;
+          next.spin_speed_deg_s = speed;
+          control_ok = applyMotion(*scene, next, control_message);
+          if (control_ok) scene_state = next;
+        } catch (const std::exception&) {
+          control_ok = false;
+          control_message = "invalid spin speed command";
+        }
       } else if (action == "gimbal-follow-toggle") {
         gimbal_control.toggleFollowing();
       } else if (action == "gimbal-fire") {
@@ -908,7 +984,8 @@ int main(int argc, char** argv) {
     coordinate_snapshot.frame_sequence = header.source_sequence;
     if (simulator_pose.isOpen()) {
       coordinate_snapshot =
-          simulator_pose.snapshotForFrame(header.source_sequence);
+          simulator_pose.snapshotForFrame(header.source_sequence,
+                                          header.capture_timestamp_ns);
       coordinate_message = coordinate_snapshot.valid
                                ? "success"
                                : simulator_pose.lastError();
@@ -1014,6 +1091,20 @@ int main(int argc, char** argv) {
         poses.begin(), poses.end(),
         [](const yolo_detect::PoseResult& pose) { return pose.valid; }));
 
+    std::vector<yolo_detect::tracking::Measurement> tracker_measurements;
+    if (coordinate_snapshot.valid) {
+      const yolo_detect::tracking::TrackerFrame tracker_frame{
+          header.source_sequence, header.capture_timestamp_ns};
+      for (std::size_t index = 0; index < poses.size(); ++index) {
+        const auto measurement = yolo_detect::tracking::makeTrackerMeasurement(
+            tracker_frame, coordinate_snapshot, poses[index], detections[index]);
+        if (measurement) tracker_measurements.push_back(*measurement);
+      }
+    }
+    const yolo_detect::tracking::TrackOutput tracker_output =
+        whole_vehicle_tracker.update(header.capture_timestamp_ns,
+                                    tracker_measurements);
+
     std::vector<DetectionAim> detection_aims(poses.size());
     if (coordinate_snapshot.valid) {
       for (std::size_t index = 0; index < poses.size(); ++index) {
@@ -1074,6 +1165,8 @@ int main(int argc, char** argv) {
                       detection_aims[index], camera_calibration,
                       options.keypoint_confidence);
       }
+      drawPredictedArmorCenters(annotated, tracker_output, coordinate_snapshot,
+                                camera_calibration);
 
       drawText(annotated,
              "YOLO armor: " + std::to_string(detections.size()) +
@@ -1129,13 +1222,21 @@ int main(int argc, char** argv) {
       drawText(annotated, control_message, 7,
              control_ok ? cv::Scalar(80, 255, 120)
                         : cv::Scalar(80, 180, 255));
+      drawText(
+          annotated,
+          "tracker T: " +
+              std::string(yolo_detect::tracking::trackingStateName(
+                  tracker_output.tracking_state)) +
+              " observations: " + std::to_string(tracker_measurements.size()) +
+              " yaw: constrained reprojection pending",
+          8, cv::Scalar(80, 180, 255));
 
       if (web_server) {
         web_server->publish(
             annotated,
             makeWebTelemetry(header.source_sequence, poses, detection_aims,
                              coordinate_snapshot, coordinate_message,
-                             gimbal_control));
+                             gimbal_control, scene_state));
       }
 
       if (!options.record_path.empty()) {

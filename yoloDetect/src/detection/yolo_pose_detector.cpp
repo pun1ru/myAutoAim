@@ -32,6 +32,11 @@ constexpr int kRobotColorBegin = 9;
 constexpr int kRobotColorCount = 4;
 constexpr int kRobotNumberBegin = 13;
 constexpr int kRobotNumberCount = 9;
+constexpr int kSzuClassValues = 2;
+constexpr int kSzuValuesPerKeypoint = 2;
+constexpr int kSzuValues =
+    kBoxValues + kSzuClassValues +
+    static_cast<int>(KeypointCount) * kSzuValuesPerKeypoint;
 
 // 将还原坐标限制在原始图像边界内。
 float clamp(float value, float lower, float upper) {
@@ -251,16 +256,22 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
   const bool pose_channel_last = output_shape[2] == kExpectedValues;
   const bool robot_channel_first = output_shape[1] == kRobotValues;
   const bool robot_channel_last = output_shape[2] == kRobotValues;
+  const bool szu_channel_first = output_shape[1] == kSzuValues;
+  const bool szu_channel_last = output_shape[2] == kSzuValues;
   const bool robot_model = robot_channel_first || robot_channel_last;
-  const bool channel_first = robot_model ? robot_channel_first
-                                         : pose_channel_first;
-  const bool channel_last = robot_model ? robot_channel_last
-                                        : pose_channel_last;
+  const bool szu_model = szu_channel_first || szu_channel_last;
+  const bool channel_first =
+      robot_model ? robot_channel_first
+                  : (szu_model ? szu_channel_first : pose_channel_first);
+  const bool channel_last =
+      robot_model ? robot_channel_last
+                  : (szu_model ? szu_channel_last : pose_channel_last);
   if (!channel_first && !channel_last) {
     throw std::runtime_error(
-        "unexpected output: expected 17 (YOLO Pose) or 22 (0526 armor) values per candidate");
+        "unexpected output: expected 16 (SZU YOLOv8), 17 (YOLO Pose), or 22 (0526 armor) values per candidate");
   }
-  const int values_per_candidate = robot_model ? kRobotValues : kExpectedValues;
+  const int values_per_candidate =
+      robot_model ? kRobotValues : (szu_model ? kSzuValues : kExpectedValues);
   const int candidate_count = static_cast<int>(
       channel_first ? output_shape[2] : output_shape[1]);
   const float* output = outputs[0].GetTensorData<float>();
@@ -277,10 +288,15 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
 
   for (int candidate_index = 0; candidate_index < candidate_count;
        ++candidate_index) {
-    const float confidence = robot_model
-                                 ? sigmoid(value_at(candidate_index,
-                                                    kRobotConfidenceIndex))
-                                 : value_at(candidate_index, kBoxValues);
+    float confidence = 0.0F;
+    if (robot_model) {
+      confidence = sigmoid(value_at(candidate_index, kRobotConfidenceIndex));
+    } else if (szu_model) {
+      confidence = std::max(value_at(candidate_index, kBoxValues),
+                            value_at(candidate_index, kBoxValues + 1));
+    } else {
+      confidence = value_at(candidate_index, kBoxValues);
+    }
     if (confidence < config_.confidence_threshold) continue;
 
     ArmorDetection detection;
@@ -343,15 +359,45 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
       detection.box = {top_left.x, top_left.y,
                        std::max(1.0F, bottom_right.x - top_left.x),
                        std::max(1.0F, bottom_right.y - top_left.y)};
-      for (std::size_t point_index = 0; point_index < KeypointCount;
-           ++point_index) {
-        const int offset = kBoxValues + kClassValues +
-                           static_cast<int>(point_index) * kValuesPerKeypoint;
-        detection.keypoints[point_index] = restorePoint(
-            value_at(candidate_index, offset),
-            value_at(candidate_index, offset + 1), transform, bgr.size());
-        detection.keypoint_confidences[point_index] =
-            value_at(candidate_index, offset + 2);
+      if (szu_model) {
+        // Shenzhen University's 416px YOLOv8 export stores four XY keypoints
+        // after two class scores. Normalize their geometric order for PnP.
+        std::array<cv::Point2f, KeypointCount> native_points;
+        for (std::size_t point_index = 0; point_index < KeypointCount;
+             ++point_index) {
+          const int offset = kBoxValues + kSzuClassValues +
+                             static_cast<int>(point_index) * kSzuValuesPerKeypoint;
+          native_points[point_index] = restorePoint(
+              value_at(candidate_index, offset), value_at(candidate_index, offset + 1),
+              transform, bgr.size());
+        }
+        std::sort(native_points.begin(), native_points.end(),
+                  [](const cv::Point2f& lhs, const cv::Point2f& rhs) {
+                    return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
+                  });
+        std::array<cv::Point2f, 2> top = {native_points[0], native_points[1]};
+        std::array<cv::Point2f, 2> bottom = {native_points[2], native_points[3]};
+        std::sort(top.begin(), top.end(),
+                  [](const cv::Point2f& lhs, const cv::Point2f& rhs) {
+                    return lhs.x < rhs.x;
+                  });
+        std::sort(bottom.begin(), bottom.end(),
+                  [](const cv::Point2f& lhs, const cv::Point2f& rhs) {
+                    return lhs.x < rhs.x;
+                  });
+        detection.keypoints = {bottom[0], top[0], top[1], bottom[1]};
+        detection.keypoint_confidences.fill(1.0F);
+      } else {
+        for (std::size_t point_index = 0; point_index < KeypointCount;
+             ++point_index) {
+          const int offset = kBoxValues + kClassValues +
+                             static_cast<int>(point_index) * kValuesPerKeypoint;
+          detection.keypoints[point_index] = restorePoint(
+              value_at(candidate_index, offset),
+              value_at(candidate_index, offset + 1), transform, bgr.size());
+          detection.keypoint_confidences[point_index] =
+              value_at(candidate_index, offset + 2);
+        }
       }
     }
 

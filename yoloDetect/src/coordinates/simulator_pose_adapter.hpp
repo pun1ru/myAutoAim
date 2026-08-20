@@ -25,7 +25,7 @@ class SimulatorPoseAdapter {
 
   // Converts the metadata matching a source frame into a coordinate snapshot.
   [[nodiscard]] CoordinateSnapshot snapshotForFrame(
-      std::uint64_t frame_sequence,
+      std::uint64_t frame_sequence, std::uint64_t capture_timestamp_ns,
       double camera_position_tolerance_m =
           kDefaultCameraPositionToleranceM) const;
 

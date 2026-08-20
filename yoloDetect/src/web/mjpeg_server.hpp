@@ -51,6 +51,10 @@ struct WebPoseTelemetry {
 
 struct WebFrameTelemetry {
   std::uint64_t source_sequence = 0;
+  std::string scene;
+  std::string motion;
+  double vehicle_speed_mps = 0.0;
+  double spin_speed_deg_s = 0.0;
   bool coordinate_valid = false;
   std::string coordinate_status;
   double camera_position_error_m = 0.0;

@@ -36,6 +36,8 @@ const char* coordinateStatusName(CoordinateStatus status) noexcept {
       return "exposure is missing chassis, gimbal, or camera pose";
     case CoordinateStatus::CameraOffsetMismatch:
       return "camera offset does not match exposure camera position";
+    case CoordinateStatus::ExposureTimestampMismatch:
+      return "exposure timestamp does not match image capture timestamp";
   }
   return "unknown coordinate status";
 }
@@ -112,6 +114,7 @@ CoordinateSnapshot makeCoordinateSnapshot(
     double camera_position_tolerance_m) noexcept {
   CoordinateSnapshot snapshot;
   snapshot.frame_sequence = observation.frame_sequence;
+  snapshot.capture_timestamp_ns = observation.capture_timestamp_ns;
 
   if (!observation.ros_odom_world) {
     snapshot.status = CoordinateStatus::InvalidWorldFrame;
@@ -186,6 +189,12 @@ cv::Vec3d cameraPointToOdom(
     const cv::Vec3d& point_camera_m) noexcept {
   return snapshot.camera_position_odom_m +
          cameraRotationOdom(snapshot) * point_camera_m;
+}
+
+cv::Vec3d cameraPointToTracker(
+    const CoordinateSnapshot& snapshot,
+    const cv::Vec3d& point_camera_m) noexcept {
+  return cameraPointToOdom(snapshot, point_camera_m);
 }
 
 // Recomputes muzzle position for a candidate yaw/elevation command.

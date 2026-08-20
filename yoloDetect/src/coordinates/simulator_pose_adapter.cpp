@@ -96,10 +96,11 @@ bool SimulatorPoseAdapter::isOpen() const noexcept {
 
 // Reads the exposure state associated with a received image frame.
 CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
-    std::uint64_t frame_sequence,
+    std::uint64_t frame_sequence, std::uint64_t capture_timestamp_ns,
     double camera_position_tolerance_m) const {
   CoordinateSnapshot invalid;
   invalid.frame_sequence = frame_sequence;
+  invalid.capture_timestamp_ns = capture_timestamp_ns;
   invalid.status = CoordinateStatus::MissingPoseState;
   if (!isOpen()) {
     last_error_ = "simulator pose adapter is not open";
@@ -120,8 +121,15 @@ CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
   }
 
   const sdk::ExposureState& state = *exposure.value;
+  if (state.frame_seq != frame_sequence ||
+      state.timestamp_ns != capture_timestamp_ns) {
+    invalid.status = CoordinateStatus::ExposureTimestampMismatch;
+    last_error_ = coordinateStatusName(invalid.status);
+    return invalid;
+  }
   CoordinateObservation observation;
   observation.frame_sequence = state.frame_seq;
+  observation.capture_timestamp_ns = state.timestamp_ns;
   observation.ros_odom_world =
       state.world_frame == sdk::kGroundTruthFrameRosOdom;
   observation.has_chassis_pose =

@@ -39,7 +39,7 @@ cmake --build .\yoloDetect\build\windows-vs2022 --config Release
 ctest --test-dir .\yoloDetect\build\windows-vs2022 -C Release --output-on-failure
 ```
 
-默认模型为 `models/armor_pose_0815_640.onnx`。构建时会将它和所需运行时 DLL 复制到
+默认模型为 `models/szu_best2_sim_416.onnx`（深圳大学模型）。构建时会将它和所需运行时 DLL 复制到
 可执行文件旁。CUDA 12.6 和 cuDNN 9 运行时 DLL 从
 `trains/.venv/Lib/site-packages/torch/lib` 加载。可通过 `--model <path>` 覆盖默认模型。
 
@@ -70,11 +70,10 @@ Linux 构建会将本地可用 ONNX 模型和 ONNX Runtime Provider 库复制到
 .\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --cpu
 ```
 
-默认 0815 模型使用较低的目标置信度阈值 `0.01`。验证部署模型后，可通过正常阈值（如 `0.25`）
-覆盖：
+深圳大学模型默认使用目标置信度阈值 `0.70`。可按场景通过命令行覆盖：
 
 ```powershell
-.\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --conf 0.25
+.\yoloDetect\build\windows-vs2022\Release\yolo_detect.exe --conf 0.70
 ```
 
 执行 `yolo_detect.exe --help` 查看连接、模型、阈值和显示选项。按 `Q` 或 `Esc` 关闭可视化窗口。
@@ -132,6 +131,12 @@ OpenCV 相机坐标，也不生成模拟器带偏移的俯仰指令。
 
 静态跟随会在 `O` 中一次性捕获 PnP 重投影 RMS 最低的有效装甲板中心，之后持续针对该固定世界点
 求解并发送绝对偏航/俯仰命令，不会被后续检测替换。停止跟随会清除已捕获目标并取消待处理射击。
+
+## 整车跟踪
+
+`tracking/whole_vehicle_ekf` 使用固定尺寸 Eigen 矩阵实现 11 维整车 EKF：车体中心和速度、连续装甲参考 yaw 与角速度，以及四装甲的交替半径和高度几何参数。它与 PnP、曝光坐标变换和云台控制保持独立；关联在四个物理槽位中选择 NIS 最小且通过门限的候选，`number_id` 与 `color_id` 仅用于身份一致性检查。
+
+运行时测量仅由 `FrameHeader::capture_timestamp_ns` 对应的曝光姿态、PnP 中心和检测质量生成。当前尚未接入独立的约束重投影 yaw 解算，因此适配层只生成 position-only 测量并显式禁用整车 EKF 初始化；不会使用 IPPE Rodrigues 向量或模拟器 GroundTruth 作为估计输入。`whole_vehicle_ekf_test` 与 `tracker_measurement_adapter_test` 分别验证滤波数学和曝光同步。
 
 ## 无界面 Web 调试
 

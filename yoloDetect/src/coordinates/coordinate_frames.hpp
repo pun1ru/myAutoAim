@@ -21,10 +21,12 @@ enum class CoordinateStatus {
   InvalidWorldFrame,
   MissingPoseState,
   CameraOffsetMismatch,
+  ExposureTimestampMismatch,
 };
 
 struct CoordinateObservation {
   std::uint64_t frame_sequence = 0;
+  std::uint64_t capture_timestamp_ns = 0;
   bool ros_odom_world = false;
   bool has_chassis_pose = false;
   bool has_gimbal_pose = false;
@@ -44,6 +46,7 @@ struct CoordinateSnapshot {
   bool valid = false;
   CoordinateStatus status = CoordinateStatus::NonFiniteInput;
   std::uint64_t frame_sequence = 0;
+  std::uint64_t capture_timestamp_ns = 0;
   cv::Vec3d chassis_position_odom_m{0.0, 0.0, 0.0};
   cv::Matx33d R_OB = cv::Matx33d::eye();
   cv::Vec3d gimbal_position_odom_m{0.0, 0.0, 0.0};
@@ -90,6 +93,13 @@ inline constexpr double kDefaultCameraPositionToleranceM = 0.01;
 
 // Transforms a camera-frame point in meters into ROS odom coordinates.
 [[nodiscard]] cv::Vec3d cameraPointToOdom(
+    const CoordinateSnapshot& snapshot,
+    const cv::Vec3d& point_camera_m) noexcept;
+
+// Tracker frame T is fixed to ROS odom for one tracking session. It preserves
+// the right-handed +x forward, +y left, +z up contract independently of the
+// exposure-time gimbal orientation.
+[[nodiscard]] cv::Vec3d cameraPointToTracker(
     const CoordinateSnapshot& snapshot,
     const cv::Vec3d& point_camera_m) noexcept;
 

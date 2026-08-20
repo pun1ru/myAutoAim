@@ -7,6 +7,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(DaedalusSimSdk 1.3.1 REQUIRED CONFIG)
+find_package(Eigen3 3.3 QUIET NO_MODULE)
+if(NOT Eigen3_FOUND)
+  find_path(EIGEN3_INCLUDE_DIR Eigen/Core)
+  if(NOT EIGEN3_INCLUDE_DIR)
+    message(FATAL_ERROR "Eigen 3.3 or later is required for whole_vehicle_tracking")
+  endif()
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"
+  )
+endif()
 find_package(OpenCV 4 REQUIRED COMPONENTS calib3d core highgui imgcodecs imgproc videoio)
 find_package(Threads REQUIRED)
 
@@ -105,6 +116,15 @@ add_library(gimbal_aim STATIC
 target_include_directories(gimbal_aim PUBLIC src)
 target_link_libraries(gimbal_aim PUBLIC ballistics coordinate_system)
 
+add_library(whole_vehicle_tracking STATIC
+    src/tracking/whole_vehicle_ekf.cpp
+    src/tracking/tracker_measurement_adapter.cpp
+)
+target_include_directories(whole_vehicle_tracking PUBLIC src)
+target_link_libraries(whole_vehicle_tracking PUBLIC
+    Eigen3::Eigen coordinate_system armor_pose
+)
+
 add_executable(yolo_detect
     src/app/main.cpp
     src/detection/yolo_pose_detector.cpp
@@ -120,6 +140,7 @@ target_link_libraries(yolo_detect PRIVATE
     armor_pose
     simulator_pose_adapter
     gimbal_aim
+    whole_vehicle_tracking
     ${OpenCV_LIBS}
     Threads::Threads
 )
@@ -133,8 +154,8 @@ if(WIN32)
       $<TARGET_RUNTIME_DLLS:yolo_detect>
       $<TARGET_FILE_DIR:yolo_detect>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/models/armor_pose_0815_640.onnx"
-      "$<TARGET_FILE_DIR:yolo_detect>/armor_pose_0815_640.onnx"
+      "${CMAKE_CURRENT_SOURCE_DIR}/models/szu_best2_sim_416.onnx"
+      "$<TARGET_FILE_DIR:yolo_detect>/szu_best2_sim_416.onnx"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/../RobotDetectionModel/Model/0526.onnx"
       "$<TARGET_FILE_DIR:yolo_detect>/robot_armor_0526.onnx"
@@ -169,7 +190,7 @@ if(UNIX AND NOT APPLE)
     COMMAND_EXPAND_LISTS
   )
   foreach(YOLO_DETECT_MODEL
-      "${CMAKE_CURRENT_SOURCE_DIR}/models/armor_pose_0815_640.onnx"
+      "${CMAKE_CURRENT_SOURCE_DIR}/models/szu_best2_sim_416.onnx"
       "${CMAKE_CURRENT_SOURCE_DIR}/../RobotDetectionModel/Model/0526.onnx")
     if(EXISTS "${YOLO_DETECT_MODEL}")
       get_filename_component(YOLO_DETECT_MODEL_NAME
@@ -250,6 +271,39 @@ if(BUILD_TESTING)
       src/test/coordinate_aim_test.cpp
   )
   target_link_libraries(coordinate_aim_test PRIVATE gimbal_aim)
+
+  add_executable(whole_vehicle_ekf_test
+      src/test/whole_vehicle_ekf_test.cpp
+  )
+  target_link_libraries(whole_vehicle_ekf_test PRIVATE whole_vehicle_tracking)
+
+  add_executable(tracker_measurement_adapter_test
+      src/test/tracker_measurement_adapter_test.cpp
+  )
+  target_link_libraries(tracker_measurement_adapter_test PRIVATE
+      whole_vehicle_tracking
+  )
+
+  if(MSVC)
+    target_compile_options(whole_vehicle_tracking PRIVATE
+        /utf-8 /W4 /permissive- /EHsc
+    )
+    target_compile_definitions(whole_vehicle_tracking PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+    )
+    target_compile_options(whole_vehicle_ekf_test PRIVATE
+        /utf-8 /W4 /permissive- /EHsc
+    )
+    target_compile_definitions(whole_vehicle_ekf_test PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+    )
+    target_compile_options(tracker_measurement_adapter_test PRIVATE
+        /utf-8 /W4 /permissive- /EHsc
+    )
+    target_compile_definitions(tracker_measurement_adapter_test PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+    )
+  endif()
   if(MSVC)
     target_compile_options(coordinate_aim_test PRIVATE
         /utf-8 /W4 /permissive- /EHsc
@@ -272,9 +326,12 @@ if(BUILD_TESTING)
   add_test(NAME ballistics_unit COMMAND vacuum_ballistic_test)
   add_test(NAME pnp_pose_unit COMMAND pnp_pose_test)
   add_test(NAME coordinate_aim_unit COMMAND coordinate_aim_test)
-  add_test(NAME armor_pose_0815_inference
+  add_test(NAME whole_vehicle_ekf_unit COMMAND whole_vehicle_ekf_test)
+  add_test(NAME tracker_measurement_adapter_unit
+      COMMAND tracker_measurement_adapter_test)
+  add_test(NAME szu_best2_sim_inference
       COMMAND yolo_pose_smoke_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/models/armor_pose_0815_640.onnx"
+        "${CMAKE_CURRENT_SOURCE_DIR}/models/szu_best2_sim_416.onnx"
         "${CMAKE_CURRENT_SOURCE_DIR}/../sampledata/origindata/20260814_043627_frame_312511.bmp"
   )
   add_test(NAME robot_armor_0526_inference
