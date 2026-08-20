@@ -23,6 +23,7 @@ struct TrackerFrame {
     const TrackerFrame& frame,
     const coordinates::CoordinateSnapshot& exposure_snapshot,
     const PoseResult& pose, const ArmorDetection& detection,
-    const ConstrainedYawSolver& yaw_solver);
+    const ConstrainedYawSolver& yaw_solver,
+    ReliableYaw* reliable_yaw = nullptr);
 
 }  // namespace yolo_detect::tracking

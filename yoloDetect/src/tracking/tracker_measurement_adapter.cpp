@@ -18,7 +18,8 @@ std::optional<Measurement> makeTrackerMeasurement(
     const TrackerFrame& frame,
     const coordinates::CoordinateSnapshot& exposure_snapshot,
     const PoseResult& pose, const ArmorDetection& detection,
-    const ConstrainedYawSolver& yaw_solver) {
+    const ConstrainedYawSolver& yaw_solver, ReliableYaw* reliable_yaw) {
+  if (reliable_yaw != nullptr) *reliable_yaw = ReliableYaw{};
   if (frame.source_sequence == 0 || frame.capture_timestamp_ns == 0 ||
       !exposure_snapshot.valid ||
       exposure_snapshot.frame_sequence != frame.source_sequence ||
@@ -42,6 +43,7 @@ std::optional<Measurement> makeTrackerMeasurement(
   measurement.view_quality = 1.0;
   const ReliableYaw yaw = yaw_solver.solve(exposure_snapshot, pose,
                                            detection.keypoints);
+  if (reliable_yaw != nullptr) *reliable_yaw = yaw;
   if (yaw.valid) {
     measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;
     measurement.has_inward_yaw = true;

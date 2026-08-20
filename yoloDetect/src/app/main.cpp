@@ -1094,13 +1094,16 @@ int main(int argc, char** argv) {
         [](const yolo_detect::PoseResult& pose) { return pose.valid; }));
 
     std::vector<yolo_detect::tracking::Measurement> tracker_measurements;
+    std::vector<yolo_detect::tracking::ReliableYaw> reliable_yaws;
     if (coordinate_snapshot.valid) {
       const yolo_detect::tracking::TrackerFrame tracker_frame{
           header.source_sequence, header.capture_timestamp_ns};
       for (std::size_t index = 0; index < poses.size(); ++index) {
+        yolo_detect::tracking::ReliableYaw reliable_yaw;
         const auto measurement = yolo_detect::tracking::makeTrackerMeasurement(
             tracker_frame, coordinate_snapshot, poses[index], detections[index],
-            constrained_yaw_solver);
+            constrained_yaw_solver, &reliable_yaw);
+        reliable_yaws.push_back(reliable_yaw);
         if (measurement) tracker_measurements.push_back(*measurement);
       }
     }
@@ -1231,8 +1234,19 @@ int main(int argc, char** argv) {
               std::string(yolo_detect::tracking::trackingStateName(
                   tracker_output.tracking_state)) +
               " observations: " + std::to_string(tracker_measurements.size()) +
-              " yaw: constrained reprojection pending",
-          8, cv::Scalar(80, 180, 255));
+              " yaw reliable: " +
+              std::to_string(std::count_if(
+                  reliable_yaws.begin(), reliable_yaws.end(),
+                  [](const yolo_detect::tracking::ReliableYaw& yaw) {
+                    return yaw.valid;
+                  })) +
+              "/" + std::to_string(reliable_yaws.size()) +
+              (reliable_yaws.empty() || reliable_yaws.front().valid
+                   ? ""
+                   : " (" + std::string(yolo_detect::tracking::reliableYawStatusName(
+                                  reliable_yaws.front().status)) + ")"),
+          8, tracker_output.has_state ? cv::Scalar(80, 255, 120)
+                                      : cv::Scalar(80, 180, 255));
 
       if (web_server) {
         web_server->publish(
