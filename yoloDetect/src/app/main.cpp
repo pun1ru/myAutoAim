@@ -712,6 +712,8 @@ int main(int argc, char** argv) {
   const yolo_detect::CameraCalibration camera_calibration =
       simulatorCameraCalibration();
   const yolo_detect::ArmorPoseEstimator pose_estimator(camera_calibration);
+  const yolo_detect::tracking::ConstrainedYawSolver constrained_yaw_solver(
+      camera_calibration);
   const yolo_detect::control::GimbalAimSolver aim_solver;
   yolo_detect::tracking::WholeVehicleEkf whole_vehicle_tracker;
   yolo_detect::coordinates::SimulatorPoseAdapter simulator_pose;
@@ -1097,7 +1099,8 @@ int main(int argc, char** argv) {
           header.source_sequence, header.capture_timestamp_ns};
       for (std::size_t index = 0; index < poses.size(); ++index) {
         const auto measurement = yolo_detect::tracking::makeTrackerMeasurement(
-            tracker_frame, coordinate_snapshot, poses[index], detections[index]);
+            tracker_frame, coordinate_snapshot, poses[index], detections[index],
+            constrained_yaw_solver);
         if (measurement) tracker_measurements.push_back(*measurement);
       }
     }

@@ -3,6 +3,7 @@
 #include "coordinates/coordinate_frames.hpp"
 #include "detection/yolo_pose_detector.hpp"
 #include "pose/armor_pose_estimator.hpp"
+#include "tracking/constrained_yaw_solver.hpp"
 #include "tracking/whole_vehicle_ekf.hpp"
 
 #include <cstdint>
@@ -21,6 +22,7 @@ struct TrackerFrame {
 [[nodiscard]] std::optional<Measurement> makeTrackerMeasurement(
     const TrackerFrame& frame,
     const coordinates::CoordinateSnapshot& exposure_snapshot,
-    const PoseResult& pose, const ArmorDetection& detection);
+    const PoseResult& pose, const ArmorDetection& detection,
+    const ConstrainedYawSolver& yaw_solver);
 
 }  // namespace yolo_detect::tracking

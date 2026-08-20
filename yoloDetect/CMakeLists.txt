@@ -117,6 +117,7 @@ target_include_directories(gimbal_aim PUBLIC src)
 target_link_libraries(gimbal_aim PUBLIC ballistics coordinate_system)
 
 add_library(whole_vehicle_tracking STATIC
+    src/tracking/constrained_yaw_solver.cpp
     src/tracking/whole_vehicle_ekf.cpp
     src/tracking/tracker_measurement_adapter.cpp
 )
@@ -280,6 +281,13 @@ if(BUILD_TESTING)
   add_executable(tracker_measurement_adapter_test
       src/test/tracker_measurement_adapter_test.cpp
   )
+
+  add_executable(constrained_yaw_solver_test
+      src/test/constrained_yaw_solver_test.cpp
+  )
+  target_link_libraries(constrained_yaw_solver_test PRIVATE
+      whole_vehicle_tracking
+  )
   target_link_libraries(tracker_measurement_adapter_test PRIVATE
       whole_vehicle_tracking
   )
@@ -329,6 +337,7 @@ if(BUILD_TESTING)
   add_test(NAME whole_vehicle_ekf_unit COMMAND whole_vehicle_ekf_test)
   add_test(NAME tracker_measurement_adapter_unit
       COMMAND tracker_measurement_adapter_test)
+  add_test(NAME constrained_yaw_solver_unit COMMAND constrained_yaw_solver_test)
   add_test(NAME szu_best2_sim_inference
       COMMAND yolo_pose_smoke_test
         "${CMAKE_CURRENT_SOURCE_DIR}/models/szu_best2_sim_416.onnx"

@@ -33,6 +33,9 @@ yolo_detect::coordinates::CoordinateSnapshot exposureSnapshot() {
 
 void testCameraToTrackerUsesMatchingExposure() {
   const auto snapshot = exposureSnapshot();
+  yolo_detect::CameraCalibration calibration;
+  calibration.image_size = {1440, 1080};
+  const yolo_detect::tracking::ConstrainedYawSolver yaw_solver(calibration);
   yolo_detect::PoseResult pose;
   pose.valid = true;
   pose.center_camera_m = {1.0, 2.0, 3.0};
@@ -45,7 +48,7 @@ void testCameraToTrackerUsesMatchingExposure() {
   const yolo_detect::tracking::TrackerFrame frame{42, 987654321ULL};
 
   const auto measurement = yolo_detect::tracking::makeTrackerMeasurement(
-      frame, snapshot, pose, detection);
+      frame, snapshot, pose, detection, yaw_solver);
   require(measurement.has_value(), "matching frame exposure must create measurement");
   require(measurement->timestamp_ns == frame.capture_timestamp_ns,
           "tracker measurement must retain image capture timestamp");
@@ -61,6 +64,9 @@ void testCameraToTrackerUsesMatchingExposure() {
 
 void testMismatchedExposureRejected() {
   const auto snapshot = exposureSnapshot();
+  yolo_detect::CameraCalibration calibration;
+  calibration.image_size = {1440, 1080};
+  const yolo_detect::tracking::ConstrainedYawSolver yaw_solver(calibration);
   yolo_detect::PoseResult pose;
   pose.valid = true;
   pose.center_camera_m = {1.0, 2.0, 3.0};
@@ -71,10 +77,10 @@ void testMismatchedExposureRejected() {
   const yolo_detect::tracking::TrackerFrame wrong_sequence{43, 987654321ULL};
   const yolo_detect::tracking::TrackerFrame wrong_timestamp{42, 987654322ULL};
   require(!yolo_detect::tracking::makeTrackerMeasurement(
-               wrong_sequence, snapshot, pose, detection),
+               wrong_sequence, snapshot, pose, detection, yaw_solver),
           "different source sequence must be rejected");
   require(!yolo_detect::tracking::makeTrackerMeasurement(
-               wrong_timestamp, snapshot, pose, detection),
+               wrong_timestamp, snapshot, pose, detection, yaw_solver),
           "different capture timestamp must be rejected");
 }
 
