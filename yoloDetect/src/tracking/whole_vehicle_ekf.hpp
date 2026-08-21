@@ -158,8 +158,8 @@ struct WholeVehicleEkfOptions {
   // 状态机确认、丢失和时间跳变策略。
   int confirming_hits = 3;
   // Keep the time threshold dominant at high detector frame rates.
-  int lost_frame_limit = 120;
-  double lost_time_limit_s = 0.5;
+  int lost_frame_limit = 300;
+  double lost_time_limit_s = 1.5;
   double maximum_frame_dt_s = 0.25;
   double initial_position_std_m = 0.25;
   double initial_velocity_std_mps = 1.0;
