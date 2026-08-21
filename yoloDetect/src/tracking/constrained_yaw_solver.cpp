@@ -1,6 +1,5 @@
 #include "tracking/constrained_yaw_solver.hpp"
 
-#include <Eigen/QR>
 #include <opencv2/calib3d.hpp>
 
 #include <algorithm>
@@ -46,53 +45,13 @@ cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad) {
 struct ProjectionEvaluation {
   double squared_error_px = std::numeric_limits<double>::infinity();
   cv::Matx33d rotation_camera_from_armor = cv::Matx33d::eye();
-  cv::Vec3d center_camera_m{0.0, 0.0, 0.0};
   std::array<cv::Point2d, kArmorPointCount> projected_points{};
 };
-
-using NormalizedImagePoints = std::array<cv::Point2d, kArmorPointCount>;
-
-bool solveConstrainedTranslation(
-    const cv::Matx33d& rotation_camera_from_armor, ArmorSize armor_size,
-    const NormalizedImagePoints& normalized_points,
-    cv::Vec3d* center_camera_m) {
-  constexpr int kEquationCount = 2 * static_cast<int>(kArmorPointCount);
-  Eigen::Matrix<double, kEquationCount, 3> system;
-  Eigen::Matrix<double, kEquationCount, 1> right_hand_side;
-  const auto object_points = ArmorPoseEstimator::objectPoints(armor_size);
-  for (std::size_t index = 0; index < object_points.size(); ++index) {
-    const cv::Point3d& point = object_points[index];
-    const cv::Vec3d rotated = rotation_camera_from_armor *
-                              cv::Vec3d(point.x, point.y, point.z);
-    const double u = normalized_points[index].x;
-    const double v = normalized_points[index].y;
-    const int row = 2 * static_cast<int>(index);
-    system.row(row) << 1.0, 0.0, -u;
-    right_hand_side[row] = u * rotated[2] - rotated[0];
-    system.row(row + 1) << 0.0, 1.0, -v;
-    right_hand_side[row + 1] = v * rotated[2] - rotated[1];
-  }
-
-  Eigen::ColPivHouseholderQR<decltype(system)> qr(system);
-  if (qr.rank() != 3) return false;
-  const Eigen::Vector3d translation = qr.solve(right_hand_side);
-  if (!translation.allFinite()) return false;
-  const cv::Vec3d translation_cv(translation.x(), translation.y(),
-                                 translation.z());
-  for (const cv::Point3d& point : object_points) {
-    const cv::Vec3d camera_point =
-        rotation_camera_from_armor * cv::Vec3d(point.x, point.y, point.z) +
-        translation_cv;
-    if (!finite(camera_point) || camera_point[2] <= 1e-6) return false;
-  }
-  *center_camera_m = translation_cv;
-  return true;
-}
 
 ProjectionEvaluation evaluateYaw(
     double inward_yaw_T_rad, const cv::Matx33d& rotation_tracker_from_camera,
     const CameraCalibration& calibration, ArmorSize armor_size,
-    const NormalizedImagePoints& normalized_points,
+    const cv::Vec3d& center_camera_m,
     const std::array<cv::Point2f, kArmorPointCount>& image_points) {
   ProjectionEvaluation evaluation;
   // 候选 yaw 先构成 T-from-A，再用同曝光 R_TC 转到 OpenCV 相机系投影。
@@ -101,11 +60,6 @@ ProjectionEvaluation evaluateYaw(
   evaluation.rotation_camera_from_armor =
       rotation_camera_from_tracker *
       rotationTrackerFromArmor(inward_yaw_T_rad);
-  if (!solveConstrainedTranslation(evaluation.rotation_camera_from_armor,
-                                   armor_size, normalized_points,
-                                   &evaluation.center_camera_m)) {
-    return evaluation;
-  }
 
   cv::Mat rvec;
   cv::Rodrigues(evaluation.rotation_camera_from_armor, rvec);
@@ -113,7 +67,7 @@ ProjectionEvaluation evaluateYaw(
   const std::vector<cv::Point3d> object_points(object_point_array.begin(),
                                                 object_point_array.end());
   std::vector<cv::Point2d> projected;
-  cv::projectPoints(object_points, rvec, evaluation.center_camera_m,
+  cv::projectPoints(object_points, rvec, center_camera_m,
                     calibration.camera_matrix,
                     calibration.distortion_coefficients, projected);
   if (projected.size() != image_points.size()) return evaluation;
@@ -182,18 +136,6 @@ ReliableYaw ConstrainedYawSolver::solve(
   // 相机朝向取自图像曝光瞬间，不能取检测处理完成时刻的云台姿态。
   const cv::Matx33d rotation_tracker_from_camera =
       coordinates::cameraRotationOdom(exposure_snapshot);
-  std::vector<cv::Point2f> distorted_points(image_points.begin(),
-                                             image_points.end());
-  std::vector<cv::Point2f> normalized_vector;
-  cv::undistortPoints(distorted_points, normalized_vector,
-                      calibration_.camera_matrix,
-                      calibration_.distortion_coefficients);
-  if (normalized_vector.size() != image_points.size()) return result;
-  NormalizedImagePoints normalized_points{};
-  for (std::size_t index = 0; index < normalized_points.size(); ++index) {
-    if (!finite(normalized_vector[index])) return result;
-    normalized_points[index] = normalized_vector[index];
-  }
   double best_yaw = 0.0;
   ProjectionEvaluation best;
   const double step = 2.0 * kPi / options_.coarse_search_steps;
@@ -202,7 +144,7 @@ ReliableYaw ConstrainedYawSolver::solve(
     const double yaw = -kPi + step * index;
     const ProjectionEvaluation candidate = evaluateYaw(
         yaw, rotation_tracker_from_camera, calibration_, pose.armor_size,
-        normalized_points, image_points);
+        pose.center_camera_m, image_points);
     if (candidate.squared_error_px < best.squared_error_px) {
       best_yaw = yaw;
       best = candidate;
@@ -217,11 +159,11 @@ ReliableYaw ConstrainedYawSolver::solve(
   double left = upper - kGolden * (upper - lower);
   double right = lower + kGolden * (upper - lower);
   double left_cost = evaluateYaw(left, rotation_tracker_from_camera, calibration_,
-                                 pose.armor_size, normalized_points,
+                                 pose.armor_size, pose.center_camera_m,
                                  image_points)
                          .squared_error_px;
   double right_cost = evaluateYaw(right, rotation_tracker_from_camera, calibration_,
-                                  pose.armor_size, normalized_points,
+                                  pose.armor_size, pose.center_camera_m,
                                   image_points)
                           .squared_error_px;
   for (int iteration = 0; iteration < 30; ++iteration) {
@@ -231,7 +173,7 @@ ReliableYaw ConstrainedYawSolver::solve(
       right_cost = left_cost;
       left = upper - kGolden * (upper - lower);
       left_cost = evaluateYaw(left, rotation_tracker_from_camera, calibration_,
-                              pose.armor_size, normalized_points,
+                              pose.armor_size, pose.center_camera_m,
                               image_points)
                       .squared_error_px;
     } else {
@@ -240,19 +182,16 @@ ReliableYaw ConstrainedYawSolver::solve(
       left_cost = right_cost;
       right = lower + kGolden * (upper - lower);
       right_cost = evaluateYaw(right, rotation_tracker_from_camera, calibration_,
-                               pose.armor_size, normalized_points,
+                               pose.armor_size, pose.center_camera_m,
                                image_points)
                        .squared_error_px;
     }
   }
   best_yaw = 0.5 * (lower + upper);
   best = evaluateYaw(best_yaw, rotation_tracker_from_camera, calibration_,
-                     pose.armor_size, normalized_points, image_points);
-  if (!finite(best.center_camera_m) || best.center_camera_m[2] <= 0.0) {
-    return result;
-  }
+                     pose.armor_size, pose.center_camera_m, image_points);
+  const cv::Vec3d refined_center_camera_m = pose.center_camera_m;
   result.inward_yaw_T_rad = wrapToPi(best_yaw);
-  result.refined_center_camera_m = best.center_camera_m;
   result.reprojection_rms_px =
       std::sqrt(best.squared_error_px / (2.0 * image_points.size()));
   if (!finite(result.reprojection_rms_px) ||
@@ -265,11 +204,11 @@ ReliableYaw ConstrainedYawSolver::solve(
   const double finite_difference_rad = 0.005;
   const double left_error = evaluateYaw(
       best_yaw - finite_difference_rad, rotation_tracker_from_camera,
-      calibration_, pose.armor_size, normalized_points, image_points)
+      calibration_, pose.armor_size, refined_center_camera_m, image_points)
                                 .squared_error_px;
   const double right_error = evaluateYaw(
       best_yaw + finite_difference_rad, rotation_tracker_from_camera,
-      calibration_, pose.armor_size, normalized_points, image_points)
+      calibration_, pose.armor_size, refined_center_camera_m, image_points)
                                  .squared_error_px;
   const double information = (left_error - 2.0 * best.squared_error_px +
                               right_error) /
@@ -287,7 +226,7 @@ ReliableYaw ConstrainedYawSolver::solve(
   // 与相差 pi 的反向法线比较，拒绝两种朝向几乎等价的平面退化情况。
   const ProjectionEvaluation opposite = evaluateYaw(
       best_yaw + kPi, rotation_tracker_from_camera, calibration_, pose.armor_size,
-      normalized_points, image_points);
+      refined_center_camera_m, image_points);
   const double opposite_rms = std::sqrt(
       opposite.squared_error_px / (2.0 * image_points.size()));
   if (!finite(opposite_rms) ||
@@ -300,9 +239,9 @@ ReliableYaw ConstrainedYawSolver::solve(
       -best.rotation_camera_from_armor(0, 0),
       -best.rotation_camera_from_armor(1, 0),
       -best.rotation_camera_from_armor(2, 0));
-  const double range = cv::norm(result.refined_center_camera_m);
+  const double range = cv::norm(refined_center_camera_m);
   result.facing_cosine =
-      outward_normal_camera.dot(-result.refined_center_camera_m) / range;
+      outward_normal_camera.dot(-refined_center_camera_m) / range;
   if (!finite(result.facing_cosine) ||
       result.facing_cosine < options_.min_facing_cosine) {
     result.status = ReliableYawStatus::BackFacingArmor;
