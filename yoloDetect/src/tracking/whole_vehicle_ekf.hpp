@@ -127,7 +127,9 @@ struct WholeVehicleEkfOptions {
   double maximum_radius_difference_m = 0.12;
   double maximum_height_difference_m = 0.20;
   // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
-  double q_linear_acceleration = 4.0;
+  // Vehicle-center acceleration spectral density. Armor rotation happens much
+  // faster than a chassis can reverse its translational acceleration.
+  double q_linear_acceleration = 0.35;
   double q_angular_acceleration = 16.0;
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
@@ -155,7 +157,8 @@ struct WholeVehicleEkfOptions {
   double nis_gate_4d = 9.488;
   // 状态机确认、丢失和时间跳变策略。
   int confirming_hits = 3;
-  int lost_frame_limit = 10;
+  // Keep the time threshold dominant at high detector frame rates.
+  int lost_frame_limit = 120;
   double lost_time_limit_s = 0.5;
   double maximum_frame_dt_s = 0.25;
   double initial_position_std_m = 0.25;

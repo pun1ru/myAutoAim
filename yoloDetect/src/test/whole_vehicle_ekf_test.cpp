@@ -206,6 +206,7 @@ void testSingleArmorDoesNotChangeGeometry() {
   truth.x[tracking::Omega] = 0.0;
   const std::uint64_t t0 = 2'700'000'000ULL;
   initializeTracker(ekf, truth, t0);
+  const tracking::State prior = ekf.state();
 
   tracking::Measurement measurement =
       observationAt(truth, 0, t0 + 20'000'000ULL);
@@ -220,6 +221,18 @@ void testSingleArmorDoesNotChangeGeometry() {
               "single armor must not change radius difference");
   requireNear(output.height_odd_delta_m, 0.0, 1e-12,
               "single armor must not change height difference");
+  requireNear(output.state.x[tracking::CenterX], prior.x[tracking::CenterX],
+              1e-12, "single armor must not move vehicle center x");
+  requireNear(output.state.x[tracking::CenterY], prior.x[tracking::CenterY],
+              1e-12, "single armor must not move vehicle center y");
+  requireNear(output.state.x[tracking::CenterZ], prior.x[tracking::CenterZ],
+              1e-12, "single armor must not move vehicle center z");
+  requireNear(output.state.x[tracking::VelocityX], 0.0, 1e-12,
+              "single armor must not create vehicle velocity x");
+  requireNear(output.state.x[tracking::VelocityY], 0.0, 1e-12,
+              "single armor must not create vehicle velocity y");
+  requireNear(output.state.x[tracking::VelocityZ], 0.0, 1e-12,
+              "single armor must not create vehicle velocity z");
 }
 
 void testLargeYawResidualBecomesPositionOnly() {
@@ -356,6 +369,44 @@ void testRotatingSlotSequenceKeepsCenterStable() {
   }
 }
 
+void testMultiArmorFramesRecoverLinearVelocity() {
+  tracking::WholeVehicleEkfOptions options;
+  options.confirming_hits = 1;
+  tracking::WholeVehicleEkf ekf(options);
+  tracking::State truth = syntheticState();
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
+  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::VelocityX] = 1.0;
+  truth.x[tracking::VelocityY] = -0.35;
+  truth.x[tracking::VelocityZ] = 0.0;
+  truth.x[tracking::Omega] = 0.7;
+  std::uint64_t timestamp_ns = 3'300'000'000ULL;
+  initializeTracker(ekf, truth, timestamp_ns);
+
+  tracking::TrackOutput output;
+  for (int frame = 0; frame < 80; ++frame) {
+    constexpr double kDt = 0.02;
+    truth = tracking::predictState(truth, kDt);
+    timestamp_ns += 20'000'000ULL;
+    const int first_slot = (frame / 20) % tracking::kArmorSlotCount;
+    const int second_slot = (first_slot + 1) % tracking::kArmorSlotCount;
+    output = ekf.update(timestamp_ns,
+                        {observationAt(truth, first_slot, timestamp_ns),
+                         observationAt(truth, second_slot, timestamp_ns)});
+  }
+  requireNear(output.velocity_T_mps.x(), truth.x[tracking::VelocityX], 0.08,
+              "multi-armor frames must recover vehicle x velocity");
+  requireNear(output.velocity_T_mps.y(), truth.x[tracking::VelocityY], 0.08,
+              "multi-armor frames must recover vehicle y velocity");
+  require((output.center_T_m -
+           Eigen::Vector3d(truth.x[tracking::CenterX],
+                           truth.x[tracking::CenterY],
+                           truth.x[tracking::CenterZ]))
+              .norm() < 0.05,
+          "multi-armor motion update must follow translating vehicle center");
+}
+
 void testLostPredictionAndReset() {
   tracking::WholeVehicleEkfOptions options;
   options.lost_frame_limit = 2;
@@ -437,6 +488,7 @@ int main() {
     testSecondArmorWithPoorYawStillUsesPosition();
     testJointUpdateIndependentOfDetectionOrder();
     testRotatingSlotSequenceKeepsCenterStable();
+    testMultiArmorFramesRecoverLinearVelocity();
     testLostPredictionAndReset();
     testJosephCovariance();
     testIrregularDtTrend();
