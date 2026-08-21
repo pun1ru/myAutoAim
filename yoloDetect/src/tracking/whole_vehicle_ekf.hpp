@@ -127,7 +127,9 @@ struct WholeVehicleEkfOptions {
   double maximum_radius_difference_m = 0.12;
   double maximum_height_difference_m = 0.20;
   // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
-  double q_linear_acceleration = 4.0;
+  // Spectral density of vehicle-center acceleration. The target may translate
+  // quickly, but its center cannot reverse acceleration at armor-rotation FPS.
+  double q_linear_acceleration = 0.35;
   double q_angular_acceleration = 16.0;
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
