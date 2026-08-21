@@ -29,18 +29,26 @@ std::optional<Measurement> makeTrackerMeasurement(
       !finite(pose.reprojection_rms_px) || !finite(detection.confidence)) {
     return std::nullopt;
   }
+  // Solve constrained yaw before transforming position. On success the same
+  // reprojection optimization supplies a translation consistent with that yaw.
+  const ReliableYaw yaw = yaw_solver.solve(exposure_snapshot, pose,
+                                           detection.keypoints);
+  if (reliable_yaw != nullptr) *reliable_yaw = yaw;
+  const cv::Vec3d center_camera_m =
+      yaw.valid ? yaw.refined_center_camera_m : pose.center_camera_m;
   Measurement measurement;
   measurement.timestamp_ns = frame.capture_timestamp_ns;
   // PnP tvec/center 已统一为米；相机到 T 的变换只使用 exposure_snapshot。
   const cv::Vec3d tracker_position = coordinates::cameraPointToTracker(
-      exposure_snapshot, pose.center_camera_m);
+      exposure_snapshot, center_camera_m);
   measurement.position_T_m = Eigen::Vector3d(
       tracker_position[0], tracker_position[1], tracker_position[2]);
-  measurement.camera_range_m = cv::norm(pose.center_camera_m);
+  measurement.camera_range_m = cv::norm(center_camera_m);
   if (!finite(measurement.camera_range_m) || measurement.camera_range_m <= 0.0) {
     return std::nullopt;
   }
-  measurement.reprojection_rms_px = pose.reprojection_rms_px;
+  measurement.reprojection_rms_px =
+      yaw.valid ? yaw.reprojection_rms_px : pose.reprojection_rms_px;
   const cv::Matx33d R_TC = coordinates::cameraRotationOdom(exposure_snapshot);
   for (int row = 0; row < 3; ++row) {
     for (int column = 0; column < 3; ++column) {
@@ -61,9 +69,6 @@ std::optional<Measurement> makeTrackerMeasurement(
       detection.keypoint_confidences.begin(), detection.keypoint_confidences.end());
   measurement.view_quality = 1.0;
   // 约束重投影 yaw 独立于 IPPE rvec；失败时保留 position-only 观测。
-  const ReliableYaw yaw = yaw_solver.solve(exposure_snapshot, pose,
-                                           detection.keypoints);
-  if (reliable_yaw != nullptr) *reliable_yaw = yaw;
   if (yaw.valid) {
     measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;
     measurement.yaw_std_rad = yaw.yaw_std_rad;

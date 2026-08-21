@@ -30,6 +30,9 @@ struct ReliableYaw {
   bool valid = false;
   ReliableYawStatus status = ReliableYawStatus::InvalidInput;
   double inward_yaw_T_rad = 0.0;
+  // Translation jointly refined while armor roll/pitch remain constrained.
+  // This prevents a biased free-IPPE tvec from being absorbed by yaw.
+  cv::Vec3d refined_center_camera_m{0.0, 0.0, 0.0};
   double reprojection_rms_px = 0.0;
   double yaw_std_rad = 0.0;
   double facing_cosine = 0.0;
