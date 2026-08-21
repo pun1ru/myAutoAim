@@ -129,7 +129,7 @@ struct WholeVehicleEkfOptions {
   // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
   // Vehicle-center acceleration spectral density. Armor rotation happens much
   // faster than a chassis can reverse its translational acceleration.
-  double q_linear_acceleration = 0.35;
+  double q_linear_acceleration = 0.02;
   double q_angular_acceleration = 16.0;
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
@@ -162,7 +162,7 @@ struct WholeVehicleEkfOptions {
   double lost_time_limit_s = 0.5;
   double maximum_frame_dt_s = 0.25;
   double initial_position_std_m = 0.25;
-  double initial_velocity_std_mps = 3.0;
+  double initial_velocity_std_mps = 1.0;
   double initial_theta_std_rad = 0.35;
   double initial_omega_std_rad_s = 8.0;
   double initial_geometry_std_m = 0.15;
