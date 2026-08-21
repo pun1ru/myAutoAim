@@ -147,9 +147,7 @@ struct WholeVehicleEkfOptions {
   double adjacent_slot_penalty = 0.5;
   double opposite_slot_penalty = 4.0;
   double minimum_visibility_cosine = -0.35;
-  // Geometry is observable from an even/odd armor pair when at least one
-  // armor supplies reliable yaw. Reliable yaw fixes phase; both positions
-  // then constrain center, r0, dr, and dz without trusting the other yaw.
+  // Geometry is observable only from distinct slots with consistent yaw.
   double geometry_yaw_consistency_rad = 0.35;
   double geometry_minimum_baseline_m = 0.08;
   // 3D/4D 卡方 NIS 门限，默认分别接近 95% 分位。
@@ -157,9 +155,7 @@ struct WholeVehicleEkfOptions {
   double nis_gate_4d = 9.488;
   // 状态机确认、丢失和时间跳变策略。
   int confirming_hits = 3;
-  // Keep the time threshold dominant at normal camera frame rates. A small
-  // frame limit makes the same physical dropout reset much sooner at high FPS.
-  int lost_frame_limit = 120;
+  int lost_frame_limit = 10;
   double lost_time_limit_s = 0.5;
   double maximum_frame_dt_s = 0.25;
   double initial_position_std_m = 0.25;
