@@ -52,6 +52,18 @@ struct ProjectionEvaluation {
 
 using NormalizedImagePoints = std::array<cv::Point2d, kArmorPointCount>;
 
+double facingCosine(const ProjectionEvaluation& evaluation) {
+  const cv::Vec3d outward_normal_camera(
+      -evaluation.rotation_camera_from_armor(0, 0),
+      -evaluation.rotation_camera_from_armor(1, 0),
+      -evaluation.rotation_camera_from_armor(2, 0));
+  const double range = cv::norm(evaluation.center_camera_m);
+  if (!finite(range) || range <= 1e-9) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return outward_normal_camera.dot(-evaluation.center_camera_m) / range;
+}
+
 bool solveConstrainedTranslation(
     const cv::Matx33d& rotation_camera_from_armor, ArmorSize armor_size,
     const NormalizedImagePoints& normalized_points,
@@ -203,6 +215,7 @@ ReliableYaw ConstrainedYawSolver::solve(
     const ProjectionEvaluation candidate = evaluateYaw(
         yaw, rotation_tracker_from_camera, calibration_, pose.armor_size,
         normalized_points, image_points);
+    if (facingCosine(candidate) < options_.min_facing_cosine) continue;
     if (candidate.squared_error_px < best.squared_error_px) {
       best_yaw = yaw;
       best = candidate;
@@ -290,19 +303,16 @@ ReliableYaw ConstrainedYawSolver::solve(
       normalized_points, image_points);
   const double opposite_rms = std::sqrt(
       opposite.squared_error_px / (2.0 * image_points.size()));
-  if (!finite(opposite_rms) ||
-      opposite_rms - result.reprojection_rms_px < options_.min_opposite_margin_px) {
+  const double opposite_facing_cosine = facingCosine(opposite);
+  if (finite(opposite_rms) && finite(opposite_facing_cosine) &&
+      opposite_facing_cosine >= options_.min_facing_cosine &&
+      opposite_rms - result.reprojection_rms_px <
+          options_.min_opposite_margin_px) {
     result.status = ReliableYawStatus::AmbiguousOrientation;
     return result;
   }
 
-  const cv::Vec3d outward_normal_camera(
-      -best.rotation_camera_from_armor(0, 0),
-      -best.rotation_camera_from_armor(1, 0),
-      -best.rotation_camera_from_armor(2, 0));
-  const double range = cv::norm(result.refined_center_camera_m);
-  result.facing_cosine =
-      outward_normal_camera.dot(-result.refined_center_camera_m) / range;
+  result.facing_cosine = facingCosine(best);
   if (!finite(result.facing_cosine) ||
       result.facing_cosine < options_.min_facing_cosine) {
     result.status = ReliableYawStatus::BackFacingArmor;
