@@ -589,7 +589,6 @@ bool WholeVehicleEkf::applyJointUpdate(
     const std::vector<Association>& associations, bool update_geometry) {
   if (associations.empty() || associations.size() > kArmorSlotCount) return false;
   const State prior = state_;
-  const bool position_observable = associations.size() >= 2;
   StackedJacobian h_stacked = StackedJacobian::Zero();
   Vector16 innovation = Vector16::Zero();
   Matrix16 covariance = Matrix16::Identity();
@@ -604,16 +603,6 @@ bool WholeVehicleEkf::applyJointUpdate(
     Vector4 block_innovation = Vector4::Zero();
     block_innovation.template head<3>() =
         measurement.position_T_m - predicted.position_T_m;
-
-    if (!position_observable) {
-      // A single rotating armor cannot distinguish vehicle translation from
-      // phase/radius error robustly. Use its position for association/NIS, but
-      // update only reliable yaw. Linear motion is corrected by multi-armor
-      // frames and otherwise follows the exposure-time prediction.
-      h.template topRows<3>().setZero();
-      block_innovation.template head<3>().setZero();
-      block_covariance.template topLeftCorner<3, 3>().setIdentity();
-    }
 
     if (!update_geometry) {
       h.col(RadiusEven).setZero();
@@ -651,14 +640,6 @@ bool WholeVehicleEkf::applyJointUpdate(
   Eigen::Matrix<double, kWholeVehicleStateDimension,
                 kMaximumStackedObservationDimension>
       gain = solved.transpose();
-  if (!position_observable) {
-    gain.row(CenterX).setZero();
-    gain.row(VelocityX).setZero();
-    gain.row(CenterY).setZero();
-    gain.row(VelocityY).setZero();
-    gain.row(CenterZ).setZero();
-    gain.row(VelocityZ).setZero();
-  }
   if (!update_geometry) {
     gain.row(RadiusEven).setZero();
     gain.row(RadiusOddDelta).setZero();

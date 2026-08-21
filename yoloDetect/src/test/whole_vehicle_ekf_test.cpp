@@ -206,7 +206,6 @@ void testSingleArmorDoesNotChangeGeometry() {
   truth.x[tracking::Omega] = 0.0;
   const std::uint64_t t0 = 2'700'000'000ULL;
   initializeTracker(ekf, truth, t0);
-  const tracking::State prior = ekf.state();
 
   tracking::Measurement measurement =
       observationAt(truth, 0, t0 + 20'000'000ULL);
@@ -221,18 +220,6 @@ void testSingleArmorDoesNotChangeGeometry() {
               "single armor must not change radius difference");
   requireNear(output.height_odd_delta_m, 0.0, 1e-12,
               "single armor must not change height difference");
-  requireNear(output.state.x[tracking::CenterX], prior.x[tracking::CenterX],
-              1e-12, "single armor must not move vehicle center x");
-  requireNear(output.state.x[tracking::CenterY], prior.x[tracking::CenterY],
-              1e-12, "single armor must not move vehicle center y");
-  requireNear(output.state.x[tracking::CenterZ], prior.x[tracking::CenterZ],
-              1e-12, "single armor must not move vehicle center z");
-  requireNear(output.state.x[tracking::VelocityX], 0.0, 1e-12,
-              "single armor must not create vehicle velocity x");
-  requireNear(output.state.x[tracking::VelocityY], 0.0, 1e-12,
-              "single armor must not create vehicle velocity y");
-  requireNear(output.state.x[tracking::VelocityZ], 0.0, 1e-12,
-              "single armor must not create vehicle velocity z");
 }
 
 void testLargeYawResidualBecomesPositionOnly() {
