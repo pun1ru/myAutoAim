@@ -19,6 +19,9 @@ std::optional<Measurement> makeTrackerMeasurement(
     const coordinates::CoordinateSnapshot& exposure_snapshot,
     const PoseResult& pose, const ArmorDetection& detection,
     const ConstrainedYawSolver& yaw_solver, ReliableYaw* reliable_yaw) {
+  // This adapter is the only handoff from vision/coordinates to the EKF.
+  // Keeping it separate prevents PnP, camera transforms, and tracker state
+  // from silently sharing mutable state or using a processing-time pose.
   if (reliable_yaw != nullptr) *reliable_yaw = ReliableYaw{};
   // 量测、图像和坐标姿态必须是同一曝光，任意序列号/时间戳不一致均拒绝。
   if (frame.source_sequence == 0 || frame.capture_timestamp_ns == 0 ||
@@ -31,6 +34,9 @@ std::optional<Measurement> makeTrackerMeasurement(
   }
   Measurement measurement;
   measurement.timestamp_ns = frame.capture_timestamp_ns;
+  // pose.center_camera_m is the PnP armor center in OpenCV C, already meters.
+  // cameraPointToTracker applies the matching exposure-time C->T transform.
+  // The tracker must never use a later gimbal pose for this image.
   // PnP tvec/center 已统一为米；相机到 T 的变换只使用 exposure_snapshot。
   const cv::Vec3d tracker_position = coordinates::cameraPointToTracker(
       exposure_snapshot, pose.center_camera_m);
@@ -62,7 +68,8 @@ std::optional<Measurement> makeTrackerMeasurement(
   measurement.view_quality = 1.0;
   // 约束重投影 yaw 独立于 IPPE rvec；失败时保留 position-only 观测。
   const ReliableYaw yaw = yaw_solver.solve(exposure_snapshot, pose,
-                                           detection.keypoints);
+                                           detection.keypoints,
+                                           detection.number_id);
   if (reliable_yaw != nullptr) *reliable_yaw = yaw;
   if (yaw.valid) {
     measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;

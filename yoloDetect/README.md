@@ -136,6 +136,11 @@ OpenCV 相机坐标，也不生成模拟器带偏移的俯仰指令。
 
 `tracking/whole_vehicle_ekf` 使用固定尺寸 Eigen 矩阵实现 11 维整车 EKF：车体中心和速度、连续装甲参考 yaw 与角速度，以及四装甲的交替半径和高度几何参数。它与 PnP、曝光坐标变换和云台控制保持独立；关联在四个物理槽位中选择 NIS 最小且通过门限的候选，`number_id` 与 `color_id` 仅用于身份一致性检查。
 
+网页端的 `EKF Tuning` 面板可运行时修改初始化协方差、过程噪声 Q、测量噪声 R、单/多板权重、槽位关联门限、几何门控和 NIS 门限。Q/R/门限立即用于后续帧；初始化不确定度在 `Reset EKF Track` 后的下一次初始化生效。
+
+参数的网页显示名称、接口名称和调节效果见 [`EKF_TUNING.md`](EKF_TUNING.md)。其中 `Yaw used gate (EKF update)` 控制可靠 yaw 是否实际进入 EKF 更新。
+同一文档还说明 `Projection Debug` 独立投影验证模式；它用白色 PnP 参考点和橙色 `D0-D3` 手动几何投影点进行对比，不修改 EKF。
+
 运行时测量仅由 `FrameHeader::capture_timestamp_ns` 对应的曝光姿态、PnP 中心和检测质量生成。当前尚未接入独立的约束重投影 yaw 解算，因此适配层只生成 position-only 测量并显式禁用整车 EKF 初始化；不会使用 IPPE Rodrigues 向量或模拟器 GroundTruth 作为估计输入。`whole_vehicle_ekf_test` 与 `tracker_measurement_adapter_test` 分别验证滤波数学和曝光同步。
 
 ## 无界面 Web 调试
@@ -157,7 +162,8 @@ ssh -N -L 8080:127.0.0.1:8080 autodl-4090
 
 随后访问 `http://127.0.0.1:8080/`。原始流和单帧 JPEG 分别为 `/stream.mjpg` 与
 `/snapshot.jpg`。如需在可信私有网络中主动暴露服务，添加 `--web-bind 0.0.0.0`。JPEG 质量由
-`--web-quality <1..100>` 设置，默认值为 80。即便设置 `--no-display`，Web 模式仍会绘制并编码
+`--web-quality <1..100>` 设置，默认值为 65。调试流会自动缩放到 960 px 宽并限制为 8 FPS，
+以避免网页视频编码影响检测和控制响应。即便设置 `--no-display`，Web 模式仍会绘制并编码
 标注帧。
 
 网页还提供 OpenCV 窗口键盘可用的模拟器控制：Shooting Range、Energy、重置、车辆运动和速度

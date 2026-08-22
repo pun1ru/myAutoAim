@@ -1,15 +1,18 @@
 #include "web/mjpeg_server.hpp"
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
 #include <iomanip>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -124,6 +127,13 @@ std::string htmlPage() {
   .control-label { color: #aab7c0; font-size: 13px; }
   .spin-input { min-width: 0; width: 100%; box-sizing: border-box; min-height: 38px; border: 1px solid #52616b; border-radius: 4px; background: #1b2227; color: #eef3f6; font: inherit; padding: 0 10px; }
   .spin-input:focus { outline: 2px solid #2f9d76; outline-offset: 1px; }
+  .tuning-panel { padding-bottom: 18px; }
+  .tuning-heading { padding: 14px 0 6px; }
+  .tuning-group { color: #7fcab0; font-size: 12px; padding: 10px 0 2px; border-bottom: 1px solid #39464f; }
+  .ekf-input { min-width: 0; width: 100%; min-height: 34px; border: 1px solid #52616b; border-radius: 4px; background: #1b2227; color: #eef3f6; font: inherit; padding: 0 8px; }
+  .ekf-input:focus { outline: 2px solid #2f9d76; outline-offset: 1px; }
+  .ekf-unit { color: #82919a; font-size: 12px; white-space: nowrap; }
+  .ekf-apply { min-height: 34px; padding: 0 9px; }
   @media (max-width: 560px) { .control-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .control-row > .control-label:first-child { grid-column: 1 / -1; } }
   .gimbal-state { grid-column: 1 / -1; color: #aab7c0; font-size: 13px; }
   button.follow { border-color: #d8a43a; }
@@ -196,6 +206,14 @@ std::string htmlPage() {
   <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
   <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
 </section>
+<section class="control-panel tuning-panel" aria-label="EKF tuning controls">
+  <div class="pose-heading tuning-heading"><h2>EKF Tuning</h2><span class="frame-meta">Live Q/R and gates; initial uncertainties apply after reset</span><button data-action="ekf-reset" type="button">Reset EKF Track</button></div>
+  <div id="ekf-tuning-controls"></div>
+</section>
+<section class="control-panel tuning-panel" aria-label="Projection debug controls">
+  <div class="pose-heading tuning-heading"><h2>Projection Debug</h2><span class="frame-meta">Does not modify EKF</span><button data-action="projection-debug-toggle" type="button">Enable</button><button data-action="projection-debug-anchor-toggle" type="button">Anchor: observed</button></div>
+  <div id="projection-debug-controls"></div>
+</section>
 <p id="control-status">Controls are sent to the detector command queue.</p>
 </aside>
 </main>
@@ -208,6 +226,8 @@ const linearSpeedState = document.getElementById('linear-speed-state');
 const spinSpeedInput = document.getElementById('spin-speed');
 const spinSpeedState = document.getElementById('spin-speed-state');
 const spinSpeedApply = document.getElementById('spin-speed-apply');
+const ekfTuningControls = document.getElementById('ekf-tuning-controls');
+const projectionDebugControls = document.getElementById('projection-debug-controls');
 async function sendControl(action, button) {
   if (button) button.disabled = true;
   controlStatus.textContent = 'Sending ' + action + '...';
@@ -233,6 +253,97 @@ spinSpeedApply.addEventListener('click', () => {
   sendControl('spin-speed:' + speed, spinSpeedApply);
 });
 
+const ekfTuningFields = [
+  ['Initial uncertainty', 'initial_position_std_m', 'Initial position std', 'm', 0, 2, 0.01],
+  ['Initial uncertainty', 'initial_velocity_std_mps', 'Initial velocity std', 'm/s', 0, 10, 0.01],
+  ['Initial uncertainty', 'initial_theta_std_rad', 'Initial theta std', 'rad', 0.001, 3.2, 0.01],
+  ['Initial uncertainty', 'initial_omega_std_rad_s', 'Initial omega std', 'rad/s', 0.001, 30, 0.01],
+  ['Initial uncertainty', 'initial_geometry_std_m', 'Initial geometry std', 'm', 0.001, 1, 0.01],
+  ['Process noise Q', 'q_linear_acceleration', 'Linear acceleration density', 'm^2/s^3', 0, 100, 0.001],
+  ['Process noise Q', 'q_angular_acceleration', 'Angular acceleration density', 'rad^2/s^3', 0, 100, 0.001],
+  ['Process noise Q', 'q_geometry', 'Geometry random walk', 'm^2/s', 0, 10, 0.001],
+  ['Measurement noise R', 'position_std_xy_m', 'Position XY std', 'm', 0.001, 1, 0.001],
+  ['Measurement noise R', 'position_std_z_m', 'Position Z std', 'm', 0.001, 2, 0.001],
+  ['Measurement noise R', 'yaw_std_rad', 'Yaw std', 'rad', 0.001, 3.2, 0.001],
+  ['Measurement noise R', 'reprojection_rms_scale', 'Reprojection RMS scale', '', 0, 10, 0.001],
+  ['Measurement noise R', 'range_noise_scale_per_m', 'Range noise scale', 'per m', 0, 2, 0.001],
+  ['Measurement noise R', 'minimum_quality', 'Minimum quality', '', 0.001, 1, 0.001],
+  ['Multi-armor weighting', 'single_armor_position_variance_scale', 'Single-plate variance scale', 'x', 1, 1000, 1],
+  ['Multi-armor weighting', 'association_position_variance_scale', 'Association position scale', 'x', 1, 2000, 1],
+  ['Multi-armor weighting', 'maximum_multi_armor_position_residual_m', 'Max multi-plate residual', 'm', 0.001, 2, 0.001],
+  ['Slot association', 'maximum_yaw_update_innovation_rad', 'Yaw used gate (EKF update)', 'rad', 0.001, 3.2, 0.001],
+  ['Slot association', 'maximum_yaw_association_innovation_rad', 'Yaw association gate', 'rad', 0.001, 3.2, 0.001],
+  ['Slot association', 'yaw_phase_cost_std_rad', 'Yaw phase cost std', 'rad', 0.001, 3.2, 0.001],
+  ['Slot association', 'adjacent_slot_penalty', 'Adjacent slot penalty', '', 0, 100, 0.01],
+  ['Slot association', 'opposite_slot_penalty', 'Opposite slot penalty', '', 0, 100, 0.01],
+  ['Slot association', 'minimum_visibility_cosine', 'Minimum visibility cosine', '', -1, 1, 0.01],
+  ['Geometry gate', 'geometry_yaw_consistency_rad', 'Geometry yaw consistency', 'rad', 0.001, 3.2, 0.001],
+  ['Geometry gate', 'geometry_minimum_baseline_m', 'Minimum plate baseline', 'm', 0.001, 2, 0.001],
+  ['Geometry gate', 'geometry_confirming_frames', 'Geometry confirming frames', 'frames', 1, 100, 1],
+  ['NIS gate', 'nis_gate_3d', 'Position NIS gate', '', 0.001, 100, 0.001],
+  ['NIS gate', 'nis_gate_4d', 'Position+yaw NIS gate', '', 0.001, 100, 0.001],
+  ['Angular limits', 'maximum_angular_speed_rad_s', 'Maximum angular speed', 'rad/s', 0.01, 30, 0.01],
+  ['Angular limits', 'maximum_omega_correction_rad_s', 'Maximum omega correction/frame', 'rad/s', 0.001, 5, 0.001],
+  ['Yaw validity', 'yaw_max_reprojection_rms_px', 'Yaw max reprojection RMS', 'px', 0.001, 20, 0.001],
+  ['Yaw validity', 'yaw_max_std_rad', 'Yaw max standard deviation', 'rad', 0.001, 3.2, 0.001],
+  ['Yaw validity', 'yaw_min_facing_cosine', 'Yaw minimum facing cosine', '', -1, 1, 0.001],
+  ['Yaw validity', 'yaw_min_opposite_margin_px', 'Yaw opposite-solution margin', 'px', 0, 20, 0.001]
+];
+let tuningGroup = '';
+for (const [group, name, label, unit, min, max, step] of ekfTuningFields) {
+  if (group !== tuningGroup) {
+    const heading = document.createElement('div');
+    heading.className = 'tuning-group';
+    heading.textContent = group;
+    ekfTuningControls.append(heading);
+    tuningGroup = group;
+  }
+  const row = document.createElement('div');
+  row.className = 'control-row';
+  row.innerHTML = '<label class="control-label" for="ekf-' + name + '">' + label + '</label>' +
+    '<input id="ekf-' + name + '" class="ekf-input" type="number" min="' + min + '" max="' + max + '" step="' + step + '" data-ekf-name="' + name + '">' +
+    '<span class="ekf-unit">' + unit + '</span><button class="ekf-apply" type="button">Apply</button>';
+  const input = row.querySelector('input');
+  const button = row.querySelector('button');
+  button.addEventListener('click', () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      controlStatus.textContent = label + ' is out of range.';
+      return;
+    }
+    sendControl('ekf-param:' + name + ':' + value, button);
+  });
+  ekfTuningControls.append(row);
+}
+
+const projectionDebugFields = [
+  ['center_x_T_m', 'Debug center cx', 'm', -20, 20, 0.001],
+  ['center_y_T_m', 'Debug center cy', 'm', -20, 20, 0.001],
+  ['center_z_T_m', 'Debug center cz', 'm', -20, 20, 0.001],
+  ['theta_rad', 'Debug theta', 'rad', -100, 100, 0.001],
+  ['radius_even_m', 'Debug r0', 'm', 0.05, 0.5, 0.001],
+  ['radius_odd_delta_m', 'Debug dr (fixed)', 'm', 0, 0, 0.001],
+  ['height_odd_delta_m', 'Debug dz (fixed)', 'm', 0, 0, 0.001]
+];
+for (const [name, label, unit, min, max, step] of projectionDebugFields) {
+  const row = document.createElement('div');
+  row.className = 'control-row';
+  row.innerHTML = '<label class="control-label" for="projection-' + name + '">' + label + '</label>' +
+    '<input id="projection-' + name + '" class="ekf-input" type="number" min="' + min + '" max="' + max + '" step="' + step + '" data-projection-name="' + name + '">' +
+    '<span class="ekf-unit">' + unit + '</span><button class="ekf-apply" type="button">Apply</button>';
+  const input = row.querySelector('input');
+  const button = row.querySelector('button');
+  button.addEventListener('click', () => {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      controlStatus.textContent = label + ' is out of range.';
+      return;
+    }
+    sendControl('projection-debug-param:' + name + ':' + value, button);
+  });
+  projectionDebugControls.append(row);
+}
+
 const poseRows = document.getElementById('pose-rows');
 const ekfRows = document.getElementById('ekf-rows');
 const ekfStateRows = document.getElementById('ekf-state-rows');
@@ -248,6 +359,8 @@ const cell = (text) => {
 const metric = (value, digits) => typeof value === 'number' ? value.toFixed(digits) : '-';
 // 独立于 MJPEG 图像流刷新遥测数据。
 async function refreshPose() {
+  if (refreshPose.pending) return;
+  refreshPose.pending = true;
   try {
     const response = await fetch('/api/status', { cache: 'no-store' });
     if (!response.ok) return;
@@ -277,6 +390,22 @@ async function refreshPose() {
     spinSpeedState.textContent = metric(state.spin_speed_deg_s, 1) + ' deg/s';
     if (document.activeElement !== spinSpeedInput) {
       spinSpeedInput.value = metric(state.spin_speed_deg_s, 1);
+    }
+    const tuning = state.ekf_tuning || {};
+    for (const input of ekfTuningControls.querySelectorAll('input[data-ekf-name]')) {
+      if (document.activeElement !== input && typeof tuning[input.dataset.ekfName] === 'number') {
+        input.value = tuning[input.dataset.ekfName];
+      }
+    }
+    const debug = state.projection_debug || {};
+    const debugToggle = document.querySelector('[data-action="projection-debug-toggle"]');
+    const debugAnchorToggle = document.querySelector('[data-action="projection-debug-anchor-toggle"]');
+    if (debugToggle) debugToggle.textContent = debug.enabled ? 'Disable' : 'Enable';
+    if (debugAnchorToggle) debugAnchorToggle.textContent = debug.anchor_observed ? 'Anchor: observed' : 'Anchor: manual';
+    for (const input of projectionDebugControls.querySelectorAll('input[data-projection-name]')) {
+      if (document.activeElement !== input && typeof debug[input.dataset.projectionName] === 'number') {
+        input.value = debug[input.dataset.projectionName];
+      }
     }
     const rows = [];
     for (const pose of state.poses) {
@@ -401,10 +530,13 @@ async function refreshPose() {
     }
     ekfObservationRows.replaceChildren(...observationRows);
   } catch (_) {
+  } finally {
+    refreshPose.pending = false;
   }
 }
+refreshPose.pending = false;
 refreshPose();
-setInterval(refreshPose, 250);
+setInterval(refreshPose, 500);
 </script>
 </body>
 </html>
@@ -419,6 +551,7 @@ struct MjpegServer::State {
   std::atomic<bool> running{true};
   std::thread accept_thread;
   std::mutex frame_mutex;
+  std::mutex publish_mutex;
   std::condition_variable frame_ready;
   std::vector<unsigned char> latest_jpeg;
   std::string latest_telemetry_json =
@@ -432,6 +565,7 @@ struct MjpegServer::State {
       R"("static_target_odom_y_m":null,"static_target_odom_z_m":null,)"
       R"("poses":[]})";
   std::uint64_t frame_sequence = 0;
+  std::chrono::steady_clock::time_point last_image_publish{};
   ControlHandler control_handler;
 #ifdef _WIN32
   std::unique_ptr<WinsockSession> winsock;
@@ -470,6 +604,89 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
          << "\",\"motion\":\"" << jsonEscape(telemetry.motion)
          << "\",\"vehicle_speed_mps\":" << telemetry.vehicle_speed_mps
          << ",\"spin_speed_deg_s\":" << telemetry.spin_speed_deg_s
+         << ",\"ekf_tuning\":{\"initial_position_std_m\":"
+         << telemetry.ekf_tuning.initial_position_std_m
+         << ",\"initial_velocity_std_mps\":"
+         << telemetry.ekf_tuning.initial_velocity_std_mps
+         << ",\"initial_theta_std_rad\":"
+         << telemetry.ekf_tuning.initial_theta_std_rad
+         << ",\"initial_omega_std_rad_s\":"
+         << telemetry.ekf_tuning.initial_omega_std_rad_s
+         << ",\"initial_geometry_std_m\":"
+         << telemetry.ekf_tuning.initial_geometry_std_m
+         << ",\"q_linear_acceleration\":"
+         << telemetry.ekf_tuning.q_linear_acceleration
+         << ",\"q_angular_acceleration\":"
+         << telemetry.ekf_tuning.q_angular_acceleration
+         << ",\"q_geometry\":" << telemetry.ekf_tuning.q_geometry
+         << ",\"position_std_xy_m\":"
+         << telemetry.ekf_tuning.position_std_xy_m
+         << ",\"position_std_z_m\":"
+         << telemetry.ekf_tuning.position_std_z_m
+         << ",\"yaw_std_rad\":" << telemetry.ekf_tuning.yaw_std_rad
+         << ",\"reprojection_rms_scale\":"
+         << telemetry.ekf_tuning.reprojection_rms_scale
+         << ",\"range_noise_scale_per_m\":"
+         << telemetry.ekf_tuning.range_noise_scale_per_m
+         << ",\"minimum_quality\":"
+         << telemetry.ekf_tuning.minimum_quality
+         << ",\"single_armor_position_variance_scale\":"
+         << telemetry.ekf_tuning.single_armor_position_variance_scale
+         << ",\"association_position_variance_scale\":"
+         << telemetry.ekf_tuning.association_position_variance_scale
+         << ",\"maximum_multi_armor_position_residual_m\":"
+         << telemetry.ekf_tuning.maximum_multi_armor_position_residual_m
+         << ",\"maximum_yaw_update_innovation_rad\":"
+         << telemetry.ekf_tuning.maximum_yaw_update_innovation_rad
+         << ",\"maximum_yaw_association_innovation_rad\":"
+         << telemetry.ekf_tuning.maximum_yaw_association_innovation_rad
+         << ",\"yaw_phase_cost_std_rad\":"
+         << telemetry.ekf_tuning.yaw_phase_cost_std_rad
+         << ",\"adjacent_slot_penalty\":"
+         << telemetry.ekf_tuning.adjacent_slot_penalty
+         << ",\"opposite_slot_penalty\":"
+         << telemetry.ekf_tuning.opposite_slot_penalty
+         << ",\"minimum_visibility_cosine\":"
+         << telemetry.ekf_tuning.minimum_visibility_cosine
+         << ",\"geometry_yaw_consistency_rad\":"
+         << telemetry.ekf_tuning.geometry_yaw_consistency_rad
+         << ",\"geometry_minimum_baseline_m\":"
+         << telemetry.ekf_tuning.geometry_minimum_baseline_m
+         << ",\"geometry_confirming_frames\":"
+         << telemetry.ekf_tuning.geometry_confirming_frames
+         << ",\"nis_gate_3d\":" << telemetry.ekf_tuning.nis_gate_3d
+         << ",\"nis_gate_4d\":" << telemetry.ekf_tuning.nis_gate_4d
+         << ",\"maximum_angular_speed_rad_s\":"
+         << telemetry.ekf_tuning.maximum_angular_speed_rad_s
+         << ",\"maximum_omega_correction_rad_s\":"
+         << telemetry.ekf_tuning.maximum_omega_correction_rad_s
+         << ",\"yaw_max_reprojection_rms_px\":"
+         << telemetry.ekf_tuning.yaw_max_reprojection_rms_px
+         << ",\"yaw_max_std_rad\":" << telemetry.ekf_tuning.yaw_max_std_rad
+         << ",\"yaw_min_facing_cosine\":"
+         << telemetry.ekf_tuning.yaw_min_facing_cosine
+         << ",\"yaw_min_opposite_margin_px\":"
+         << telemetry.ekf_tuning.yaw_min_opposite_margin_px << "}"
+         << ",\"projection_debug\":{"
+         << "\"enabled\":"
+         << (telemetry.projection_debug.enabled ? "true" : "false")
+         << ",\"anchor_observed\":"
+         << (telemetry.projection_debug.anchor_observed ? "true" : "false")
+         << ",\"has_reference\":"
+         << (telemetry.projection_debug.has_reference ? "true" : "false")
+         << ",\"center_x_T_m\":"
+         << telemetry.projection_debug.center_x_T_m
+         << ",\"center_y_T_m\":"
+         << telemetry.projection_debug.center_y_T_m
+         << ",\"center_z_T_m\":"
+         << telemetry.projection_debug.center_z_T_m
+         << ",\"theta_rad\":" << telemetry.projection_debug.theta_rad
+         << ",\"radius_even_m\":"
+         << telemetry.projection_debug.radius_even_m
+         << ",\"radius_odd_delta_m\":"
+         << telemetry.projection_debug.radius_odd_delta_m
+         << ",\"height_odd_delta_m\":"
+         << telemetry.projection_debug.height_odd_delta_m << "}"
          << ",\"tracker_state\":\""
          << jsonEscape(telemetry.tracker_state)
          << "\",\"tracker_has_state\":"
@@ -721,7 +938,33 @@ void sendControlJson(Socket client, int status, const char* message) {
                    "\r\nConnection: close\r\n\r\n" + body);
 }
 
-// 从控制请求行提取并校验操作令牌。
+// Decode the query value before validating it. Browser fetch() percent-encodes
+// the ':' used by the variable spin-speed command.
+std::optional<std::string> decodeQueryValue(std::string_view encoded) {
+  std::string decoded;
+  decoded.reserve(encoded.size());
+  const auto hexValue = [](char character) -> int {
+    if (character >= '0' && character <= '9') return character - '0';
+    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+    return -1;
+  };
+  for (std::size_t index = 0; index < encoded.size(); ++index) {
+    if (encoded[index] != '%') {
+      decoded.push_back(encoded[index]);
+      continue;
+    }
+    if (index + 2 >= encoded.size()) return std::nullopt;
+    const int high = hexValue(encoded[index + 1]);
+    const int low = hexValue(encoded[index + 2]);
+    if (high < 0 || low < 0) return std::nullopt;
+    decoded.push_back(static_cast<char>((high << 4) | low));
+    index += 2;
+  }
+  return decoded;
+}
+
+// Extract and validate a control operation token from an HTTP request line.
 std::string controlAction(const std::string& request) {
   const std::size_t path_end = request.find(' ', 4);
   if (path_end == std::string::npos) return {};
@@ -731,9 +974,15 @@ std::string controlAction(const std::string& request) {
   std::string action = target.substr(kPrefix.size());
   const std::size_t next_parameter = action.find('&');
   if (next_parameter != std::string::npos) action.resize(next_parameter);
-  if (action.empty() || action.size() > 64) return {};
+  const std::optional<std::string> decoded_action = decodeQueryValue(action);
+  if (!decoded_action) return {};
+  action = *decoded_action;
+  if (action.empty() || action.size() > 160) return {};
   for (const unsigned char character : action) {
-    if (!std::isalnum(character) && character != '-') return {};
+    if (!std::isalnum(character) && character != '-' && character != ':' &&
+        character != '.' && character != '_') {
+      return {};
+    }
   }
   return action;
 }
@@ -865,6 +1114,9 @@ MjpegServer::MjpegServer(WebServerOptions options, ControlHandler control_handle
   if (options.jpeg_quality < 1 || options.jpeg_quality > 100) {
     throw std::invalid_argument("web JPEG quality must be in [1, 100]");
   }
+  if (options.max_image_width < 160 || options.max_frame_rate < 1) {
+    throw std::invalid_argument("invalid web image size or frame rate");
+  }
   state_->options = std::move(options);
   state_->control_handler = std::move(control_handler);
 #ifdef _WIN32
@@ -930,16 +1182,38 @@ void MjpegServer::publish(const cv::Mat& bgr_frame) {
 // 对图像帧进行 JPEG 编码，原子替换共享数据并唤醒客户端。
 void MjpegServer::publish(const cv::Mat& bgr_frame,
                           const WebFrameTelemetry& telemetry) {
-  if (bgr_frame.empty()) return;
-  std::vector<unsigned char> jpeg;
-  const std::vector<int> parameters = {cv::IMWRITE_JPEG_QUALITY,
-                                       state_->options.jpeg_quality};
-  if (!cv::imencode(".jpg", bgr_frame, jpeg, parameters)) return;
   const std::string telemetry_json = telemetryJson(telemetry);
   {
     std::lock_guard<std::mutex> lock(state_->frame_mutex);
-    state_->latest_jpeg = std::move(jpeg);
     state_->latest_telemetry_json = telemetry_json;
+  }
+
+  if (bgr_frame.empty()) return;
+  std::lock_guard<std::mutex> publish_lock(state_->publish_mutex);
+  const auto now = std::chrono::steady_clock::now();
+  const auto publish_interval =
+      std::chrono::milliseconds(1000 / state_->options.max_frame_rate);
+  if (state_->last_image_publish.time_since_epoch().count() != 0 &&
+      now - state_->last_image_publish < publish_interval) {
+    return;
+  }
+  state_->last_image_publish = now;
+
+  cv::Mat web_frame;
+  if (bgr_frame.cols > state_->options.max_image_width) {
+    const double scale = static_cast<double>(state_->options.max_image_width) /
+                         static_cast<double>(bgr_frame.cols);
+    cv::resize(bgr_frame, web_frame, {}, scale, scale, cv::INTER_AREA);
+  } else {
+    web_frame = bgr_frame;
+  }
+  std::vector<unsigned char> jpeg;
+  const std::vector<int> parameters = {cv::IMWRITE_JPEG_QUALITY,
+                                       state_->options.jpeg_quality};
+  if (!cv::imencode(".jpg", web_frame, jpeg, parameters)) return;
+  {
+    std::lock_guard<std::mutex> lock(state_->frame_mutex);
+    state_->latest_jpeg = std::move(jpeg);
     ++state_->frame_sequence;
   }
   state_->frame_ready.notify_all();

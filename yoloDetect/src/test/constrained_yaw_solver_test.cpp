@@ -19,12 +19,15 @@ double wrapToPi(double angle) {
   return std::atan2(std::sin(angle), std::cos(angle));
 }
 
-cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad) {
+cv::Matx33d rotationTrackerFromArmor(double inward_yaw_T_rad,
+                                     double pitch_rad = 0.0) {
   const double c = std::cos(inward_yaw_T_rad);
   const double s = std::sin(inward_yaw_T_rad);
-  const cv::Vec3d x_in_T(c, s, 0.0);
-  const cv::Vec3d z_up_T(0.0, 0.0, 1.0);
-  const cv::Vec3d y_left_T = z_up_T.cross(x_in_T);
+  const double cp = std::cos(pitch_rad);
+  const double sp = std::sin(pitch_rad);
+  const cv::Vec3d x_in_T(c * cp, s * cp, -sp);
+  const cv::Vec3d y_left_T(-s, c, 0.0);
+  const cv::Vec3d z_up_T(c * sp, s * sp, cp);
   return {
       x_in_T[0], y_left_T[0], z_up_T[0],
       x_in_T[1], y_left_T[1], z_up_T[1],
@@ -58,10 +61,10 @@ yolo_detect::CameraCalibration calibration() {
 std::array<cv::Point2f, yolo_detect::kArmorPointCount> imagePoints(
     const yolo_detect::coordinates::CoordinateSnapshot& snapshot,
     const yolo_detect::CameraCalibration& camera, double yaw_T_rad,
-    const cv::Vec3d& center_camera_m) {
+    const cv::Vec3d& center_camera_m, double pitch_rad = 0.0) {
   const cv::Matx33d R_CA =
       yolo_detect::coordinates::cameraRotationOdom(snapshot).t() *
-      rotationTrackerFromArmor(yaw_T_rad);
+      rotationTrackerFromArmor(yaw_T_rad, pitch_rad);
   cv::Mat rvec;
   cv::Rodrigues(R_CA, rvec);
   const auto object_point_array =
@@ -94,7 +97,10 @@ void testRecoversYawWithoutPnpRotation() {
 
   const auto points = imagePoints(snapshot, camera, kExpectedYaw,
                                   pose.center_camera_m);
-  const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
+  yolo_detect::tracking::ConstrainedYawOptions options;
+  options.armor_pitch_rad = 0.0;
+  options.outpost_pitch_rad = 0.0;
+  const yolo_detect::tracking::ConstrainedYawSolver solver(camera, options);
   const auto result = solver.solve(snapshot, pose, points);
   if (!result.valid) {
     throw std::runtime_error(
@@ -119,9 +125,31 @@ void testRejectsInconsistentCorners() {
   auto points = imagePoints(snapshot, camera, 0.0, pose.center_camera_m);
   for (cv::Point2f& point : points) point.x += 20.0F;
 
-  const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
+  yolo_detect::tracking::ConstrainedYawOptions options;
+  options.armor_pitch_rad = 0.0;
+  options.outpost_pitch_rad = 0.0;
+  const yolo_detect::tracking::ConstrainedYawSolver solver(camera, options);
   const auto result = solver.solve(snapshot, pose, points);
   require(!result.valid, "inconsistent corners must not produce reliable yaw");
+}
+
+void testSpVisionFixedPitchPrior() {
+  const auto snapshot = exposureSnapshot();
+  const auto camera = calibration();
+  constexpr double kExpectedYaw = -0.4;
+  yolo_detect::PoseResult pose;
+  pose.valid = true;
+  pose.armor_size = yolo_detect::ArmorSize::Small;
+  pose.center_camera_m = {0.0, 0.0, 5.0};
+  const auto points = imagePoints(snapshot, camera, kExpectedYaw,
+                                  pose.center_camera_m,
+                                  15.0 * CV_PI / 180.0);
+  const yolo_detect::tracking::ConstrainedYawSolver solver(camera);
+  const auto result = solver.solve(snapshot, pose, points);
+  require(result.valid, "sp_vision_25 fixed-pitch projection must solve");
+  require(std::abs(wrapToPi(result.inward_yaw_T_rad - kExpectedYaw)) <
+              1.0 * CV_PI / 180.0,
+          "fixed-pitch search must recover yaw within one grid degree");
 }
 
 }  // namespace
@@ -130,6 +158,7 @@ int main() {
   try {
     testRecoversYawWithoutPnpRotation();
     testRejectsInconsistentCorners();
+    testSpVisionFixedPitchPrior();
     std::cout << "constrained yaw solver tests passed\n";
     return 0;
   } catch (const std::exception& error) {

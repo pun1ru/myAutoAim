@@ -60,7 +60,7 @@ struct Options {
   int display_width = 1100;
   std::uint16_t web_port = 0;
   std::string web_bind = "127.0.0.1";
-  int web_jpeg_quality = 80;
+  int web_jpeg_quality = 65;
   std::filesystem::path ipc_directory;
   std::uint8_t target = 3;
   float vehicle_speed = 1.5F;
@@ -100,6 +100,19 @@ struct DetectionAim {
   yolo_detect::control::GimbalAimResult aim;
 };
 
+struct ProjectionDebugState {
+  bool enabled = false;
+  bool anchor_observed = true;
+  bool has_reference = false;
+  double center_x_T_m = 0.0;
+  double center_y_T_m = 0.0;
+  double center_z_T_m = 0.0;
+  double theta_rad = 0.0;
+  double radius_even_m = 0.15;
+  double radius_odd_delta_m = 0.0;
+  double height_odd_delta_m = 0.0;
+};
+
 // 根据可执行文件位置推导随程序部署的默认模型路径。
 std::filesystem::path defaultModelPath(const char* executable) {
   std::error_code error;
@@ -137,7 +150,7 @@ void printUsage() {
       << "  --width <pixels>     Display width (default: 1100)\n"
       << "  --web <port>         Serve annotated MJPEG frames over HTTP\n"
       << "  --web-bind <address> Web bind address (default: 127.0.0.1)\n"
-      << "  --web-quality <1..100> JPEG quality for --web (default: 80)\n"
+      << "  --web-quality <1..100> JPEG quality for --web (default: 65)\n"
       << "  --ipc-dir <path>     Talos IPC directory for synchronized poses\n"
       << "  --target <0..255>    Shooting-range vehicle ID (default: 3)\n"
       << "  --speed <m/s>        Initial vehicle speed (default: 1.5)\n"
@@ -541,6 +554,38 @@ void drawDetection(cv::Mat& image,
   }
 }
 
+std::optional<cv::Point> projectTrackerPoint(
+    const Eigen::Vector3d& point_tracker_m, const cv::Size image_size,
+    const yolo_detect::coordinates::CoordinateSnapshot& exposure_snapshot,
+    const yolo_detect::CameraCalibration& calibration) {
+  if (!exposure_snapshot.valid || !point_tracker_m.allFinite()) {
+    return std::nullopt;
+  }
+  const cv::Matx33d R_CO =
+      yolo_detect::coordinates::cameraRotationOdom(exposure_snapshot).t();
+  const cv::Vec3d point_tracker(point_tracker_m.x(), point_tracker_m.y(),
+                                point_tracker_m.z());
+  const cv::Vec3d point_camera =
+      R_CO * (point_tracker - exposure_snapshot.camera_position_odom_m);
+  if (!std::isfinite(point_camera[0]) || !std::isfinite(point_camera[1]) ||
+      !std::isfinite(point_camera[2]) || point_camera[2] <= 0.0) {
+    return std::nullopt;
+  }
+  std::vector<cv::Point2d> projected;
+  cv::projectPoints(std::vector<cv::Point3d>{
+                        {point_camera[0], point_camera[1], point_camera[2]}},
+                    cv::Vec3d(0.0, 0.0, 0.0), cv::Vec3d(0.0, 0.0, 0.0),
+                    calibration.camera_matrix,
+                    calibration.distortion_coefficients, projected);
+  if (projected.size() != 1 || !std::isfinite(projected[0].x) ||
+      !std::isfinite(projected[0].y) || projected[0].x < 0.0 ||
+      projected[0].y < 0.0 || projected[0].x >= image_size.width ||
+      projected[0].y >= image_size.height) {
+    return std::nullopt;
+  }
+  return cv::Point(cvRound(projected[0].x), cvRound(projected[0].y));
+}
+
 // Projects whole-vehicle EKF armor-center predictions using the same exposure
 // snapshot that produced the current image frame.
 void drawPredictedArmorCenters(
@@ -548,38 +593,61 @@ void drawPredictedArmorCenters(
     const yolo_detect::coordinates::CoordinateSnapshot& exposure_snapshot,
     const yolo_detect::CameraCalibration& calibration) {
   if (!tracker_output.has_state || !exposure_snapshot.valid) return;
-  const cv::Matx33d R_CO =
-      yolo_detect::coordinates::cameraRotationOdom(exposure_snapshot).t();
   for (const yolo_detect::tracking::DecodedArmor& armor :
        tracker_output.predicted_armors) {
-    const cv::Vec3d point_tracker(armor.position_T_m.x(),
-                                  armor.position_T_m.y(),
-                                  armor.position_T_m.z());
-    const cv::Vec3d point_camera = R_CO *
-        (point_tracker - exposure_snapshot.camera_position_odom_m);
-    if (!std::isfinite(point_camera[0]) || !std::isfinite(point_camera[1]) ||
-        !std::isfinite(point_camera[2]) || point_camera[2] <= 0.0) {
-      continue;
-    }
-    std::vector<cv::Point2d> projected;
-    cv::projectPoints(std::vector<cv::Point3d>{
-                          {point_camera[0], point_camera[1], point_camera[2]}},
-                      cv::Vec3d(0.0, 0.0, 0.0), cv::Vec3d(0.0, 0.0, 0.0),
-                      calibration.camera_matrix,
-                      calibration.distortion_coefficients, projected);
-    if (projected.size() != 1 || !std::isfinite(projected[0].x) ||
-        !std::isfinite(projected[0].y) || projected[0].x < 0.0 ||
-        projected[0].y < 0.0 || projected[0].x >= image.cols ||
-        projected[0].y >= image.rows) {
-      continue;
-    }
-    const cv::Point center(cvRound(projected[0].x), cvRound(projected[0].y));
+    const std::optional<cv::Point> projected = projectTrackerPoint(
+        armor.position_T_m, image.size(), exposure_snapshot, calibration);
+    if (!projected) continue;
+    const cv::Point center = *projected;
     cv::circle(image, center, 7, cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA);
     cv::circle(image, center, 5, cv::Scalar(0, 255, 255), cv::FILLED,
                cv::LINE_AA);
     cv::putText(image, "E" + std::to_string(armor.armor_slot),
                 center + cv::Point(7, -7), cv::FONT_HERSHEY_SIMPLEX, 0.5,
                 cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+  }
+}
+
+void drawProjectionDebugCenters(
+    cv::Mat& image, const ProjectionDebugState& debug_state,
+    const std::optional<yolo_detect::tracking::Measurement>& reference,
+    const yolo_detect::coordinates::CoordinateSnapshot& exposure_snapshot,
+    const yolo_detect::CameraCalibration& calibration) {
+  if (!debug_state.enabled || !exposure_snapshot.valid) return;
+  yolo_detect::tracking::State state;
+  state.x[yolo_detect::tracking::CenterX] = debug_state.center_x_T_m;
+  state.x[yolo_detect::tracking::CenterY] = debug_state.center_y_T_m;
+  state.x[yolo_detect::tracking::CenterZ] = debug_state.center_z_T_m;
+  state.x[yolo_detect::tracking::Theta] = debug_state.theta_rad;
+  state.x[yolo_detect::tracking::RadiusEven] = debug_state.radius_even_m;
+  state.x[yolo_detect::tracking::RadiusOddDelta] =
+      debug_state.radius_odd_delta_m;
+  state.x[yolo_detect::tracking::HeightOddDelta] =
+      debug_state.height_odd_delta_m;
+  for (int slot = 0; slot < yolo_detect::tracking::kArmorSlotCount; ++slot) {
+    const auto armor = yolo_detect::tracking::decodeArmor(state, slot, 0.0);
+    const std::optional<cv::Point> projected = projectTrackerPoint(
+        armor.position_T_m, image.size(), exposure_snapshot, calibration);
+    if (!projected) continue;
+    const cv::Point center = *projected;
+    cv::circle(image, center, 8, cv::Scalar(0, 0, 0), cv::FILLED,
+               cv::LINE_AA);
+    cv::circle(image, center, 6, cv::Scalar(0, 165, 255), cv::FILLED,
+               cv::LINE_AA);
+    cv::putText(image, "D" + std::to_string(slot), center + cv::Point(8, -8),
+                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 165, 255), 2,
+                cv::LINE_AA);
+  }
+  if (reference && reference->position_T_m.allFinite()) {
+    const auto projected = projectTrackerPoint(
+        reference->position_T_m, image.size(), exposure_snapshot, calibration);
+    if (projected) {
+      cv::drawMarker(image, *projected, cv::Scalar(255, 255, 255),
+                     cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
+      cv::putText(image, "PnP ref", *projected + cv::Point(8, 18),
+                  cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(255, 255, 255),
+                  2, cv::LINE_AA);
+    }
   }
 }
 
@@ -593,6 +661,9 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const yolo_detect::control::StaticTargetController& gimbal_control,
     const SceneState& scene_state,
     const yolo_detect::tracking::TrackOutput& tracker_output,
+    const yolo_detect::tracking::WholeVehicleEkfOptions& ekf_options,
+    const yolo_detect::tracking::ConstrainedYawOptions& yaw_options,
+    const ProjectionDebugState& projection_debug,
     const std::vector<yolo_detect::tracking::ReliableYaw>& reliable_yaws,
     const std::vector<yolo_detect::tracking::Measurement>& tracker_measurements) {
   yolo_detect::WebFrameTelemetry telemetry;
@@ -601,6 +672,59 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   telemetry.motion = motionName(scene_state.motion);
   telemetry.vehicle_speed_mps = scene_state.vehicle_speed;
   telemetry.spin_speed_deg_s = scene_state.spin_speed_deg_s;
+  auto& tuning = telemetry.ekf_tuning;
+  tuning.initial_position_std_m = ekf_options.initial_position_std_m;
+  tuning.initial_velocity_std_mps = ekf_options.initial_velocity_std_mps;
+  tuning.initial_theta_std_rad = ekf_options.initial_theta_std_rad;
+  tuning.initial_omega_std_rad_s = ekf_options.initial_omega_std_rad_s;
+  tuning.initial_geometry_std_m = ekf_options.initial_geometry_std_m;
+  tuning.q_linear_acceleration = ekf_options.q_linear_acceleration;
+  tuning.q_angular_acceleration = ekf_options.q_angular_acceleration;
+  tuning.q_geometry = ekf_options.q_geometry;
+  tuning.position_std_xy_m = ekf_options.position_std_xy_m;
+  tuning.position_std_z_m = ekf_options.position_std_z_m;
+  tuning.yaw_std_rad = ekf_options.yaw_std_rad;
+  tuning.reprojection_rms_scale = ekf_options.reprojection_rms_scale;
+  tuning.range_noise_scale_per_m = ekf_options.range_noise_scale_per_m;
+  tuning.minimum_quality = ekf_options.minimum_quality;
+  tuning.single_armor_position_variance_scale =
+      ekf_options.single_armor_position_variance_scale;
+  tuning.association_position_variance_scale =
+      ekf_options.association_position_variance_scale;
+  tuning.maximum_multi_armor_position_residual_m =
+      ekf_options.maximum_multi_armor_position_residual_m;
+  tuning.maximum_yaw_update_innovation_rad =
+      ekf_options.maximum_yaw_update_innovation_rad;
+  tuning.maximum_yaw_association_innovation_rad =
+      ekf_options.maximum_yaw_association_innovation_rad;
+  tuning.yaw_phase_cost_std_rad = ekf_options.yaw_phase_cost_std_rad;
+  tuning.adjacent_slot_penalty = ekf_options.adjacent_slot_penalty;
+  tuning.opposite_slot_penalty = ekf_options.opposite_slot_penalty;
+  tuning.minimum_visibility_cosine = ekf_options.minimum_visibility_cosine;
+  tuning.geometry_yaw_consistency_rad = ekf_options.geometry_yaw_consistency_rad;
+  tuning.geometry_minimum_baseline_m = ekf_options.geometry_minimum_baseline_m;
+  tuning.geometry_confirming_frames = ekf_options.geometry_confirming_frames;
+  tuning.nis_gate_3d = ekf_options.nis_gate_3d;
+  tuning.nis_gate_4d = ekf_options.nis_gate_4d;
+  tuning.maximum_angular_speed_rad_s = ekf_options.maximum_angular_speed_rad_s;
+  tuning.maximum_omega_correction_rad_s =
+      ekf_options.maximum_omega_correction_rad_s;
+  tuning.yaw_max_reprojection_rms_px = yaw_options.max_reprojection_rms_px;
+  tuning.yaw_max_std_rad = yaw_options.max_yaw_std_rad;
+  tuning.yaw_min_facing_cosine = yaw_options.min_facing_cosine;
+  tuning.yaw_min_opposite_margin_px = yaw_options.min_opposite_margin_px;
+  telemetry.projection_debug.enabled = projection_debug.enabled;
+  telemetry.projection_debug.anchor_observed = projection_debug.anchor_observed;
+  telemetry.projection_debug.has_reference = projection_debug.has_reference;
+  telemetry.projection_debug.center_x_T_m = projection_debug.center_x_T_m;
+  telemetry.projection_debug.center_y_T_m = projection_debug.center_y_T_m;
+  telemetry.projection_debug.center_z_T_m = projection_debug.center_z_T_m;
+  telemetry.projection_debug.theta_rad = projection_debug.theta_rad;
+  telemetry.projection_debug.radius_even_m = projection_debug.radius_even_m;
+  telemetry.projection_debug.radius_odd_delta_m =
+      projection_debug.radius_odd_delta_m;
+  telemetry.projection_debug.height_odd_delta_m =
+      projection_debug.height_odd_delta_m;
   telemetry.tracker_state = yolo_detect::tracking::trackingStateName(
       tracker_output.tracking_state);
   telemetry.tracker_has_state = tracker_output.has_state;
@@ -797,10 +921,11 @@ int main(int argc, char** argv) {
   const yolo_detect::CameraCalibration camera_calibration =
       simulatorCameraCalibration();
   const yolo_detect::ArmorPoseEstimator pose_estimator(camera_calibration);
-  const yolo_detect::tracking::ConstrainedYawSolver constrained_yaw_solver(
+  yolo_detect::tracking::ConstrainedYawSolver constrained_yaw_solver(
       camera_calibration);
   const yolo_detect::control::GimbalAimSolver aim_solver;
   yolo_detect::tracking::WholeVehicleEkf whole_vehicle_tracker;
+  ProjectionDebugState projection_debug;
   yolo_detect::coordinates::SimulatorPoseAdapter simulator_pose;
   std::string coordinate_message =
       "coordinate transform disabled: provide --ipc-dir";
@@ -954,16 +1079,135 @@ int main(int argc, char** argv) {
 
   std::mutex web_command_mutex;
   std::deque<std::string> web_commands;
+  const auto applyEkfTuning = [&](std::string_view action) {
+    constexpr std::string_view prefix = "ekf-param:";
+    if (!hasPrefix(action, prefix)) return false;
+    const std::string payload(action.substr(prefix.size()));
+    const std::size_t separator = payload.find(':');
+    if (separator == std::string::npos || separator == 0 ||
+        separator + 1 >= payload.size()) {
+      return false;
+    }
+    const std::string name = payload.substr(0, separator);
+    const std::string value_text = payload.substr(separator + 1);
+    try {
+      const double value = std::stod(value_text);
+      if (!std::isfinite(value)) return false;
+      if (name == "yaw_max_reprojection_rms_px" ||
+          name == "yaw_max_std_rad" || name == "yaw_min_facing_cosine" ||
+          name == "yaw_min_opposite_margin_px") {
+        auto tuned = constrained_yaw_solver.options();
+        if (name == "yaw_max_reprojection_rms_px") {
+          tuned.max_reprojection_rms_px = value;
+        } else if (name == "yaw_max_std_rad") {
+          tuned.max_yaw_std_rad = value;
+        } else if (name == "yaw_min_facing_cosine") {
+          tuned.min_facing_cosine = value;
+        } else {
+          tuned.min_opposite_margin_px = value;
+        }
+        if (!constrained_yaw_solver.setOptions(tuned)) return false;
+        control_message = "Yaw validity parameter updated: " + name;
+        return true;
+      }
+      auto tuned = whole_vehicle_tracker.options();
+      if (name == "initial_position_std_m") tuned.initial_position_std_m = value;
+      else if (name == "initial_velocity_std_mps") tuned.initial_velocity_std_mps = value;
+      else if (name == "initial_theta_std_rad") tuned.initial_theta_std_rad = value;
+      else if (name == "initial_omega_std_rad_s") tuned.initial_omega_std_rad_s = value;
+      else if (name == "initial_geometry_std_m") tuned.initial_geometry_std_m = value;
+      else if (name == "q_linear_acceleration") tuned.q_linear_acceleration = value;
+      else if (name == "q_angular_acceleration") tuned.q_angular_acceleration = value;
+      else if (name == "q_geometry") tuned.q_geometry = value;
+      else if (name == "position_std_xy_m") tuned.position_std_xy_m = value;
+      else if (name == "position_std_z_m") tuned.position_std_z_m = value;
+      else if (name == "yaw_std_rad") tuned.yaw_std_rad = value;
+      else if (name == "reprojection_rms_scale") tuned.reprojection_rms_scale = value;
+      else if (name == "range_noise_scale_per_m") tuned.range_noise_scale_per_m = value;
+      else if (name == "minimum_quality") tuned.minimum_quality = value;
+      else if (name == "single_armor_position_variance_scale") tuned.single_armor_position_variance_scale = value;
+      else if (name == "association_position_variance_scale") tuned.association_position_variance_scale = value;
+      else if (name == "maximum_multi_armor_position_residual_m") tuned.maximum_multi_armor_position_residual_m = value;
+      else if (name == "maximum_yaw_update_innovation_rad") tuned.maximum_yaw_update_innovation_rad = value;
+      else if (name == "maximum_yaw_association_innovation_rad") tuned.maximum_yaw_association_innovation_rad = value;
+      else if (name == "yaw_phase_cost_std_rad") tuned.yaw_phase_cost_std_rad = value;
+      else if (name == "adjacent_slot_penalty") tuned.adjacent_slot_penalty = value;
+      else if (name == "opposite_slot_penalty") tuned.opposite_slot_penalty = value;
+      else if (name == "minimum_visibility_cosine") tuned.minimum_visibility_cosine = value;
+      else if (name == "geometry_yaw_consistency_rad") tuned.geometry_yaw_consistency_rad = value;
+      else if (name == "geometry_minimum_baseline_m") tuned.geometry_minimum_baseline_m = value;
+      else if (name == "geometry_confirming_frames") {
+        const double rounded = std::round(value);
+        if (std::abs(value - rounded) > 1e-9) return false;
+        tuned.geometry_confirming_frames = static_cast<int>(rounded);
+      } else if (name == "nis_gate_3d") tuned.nis_gate_3d = value;
+      else if (name == "nis_gate_4d") tuned.nis_gate_4d = value;
+      else if (name == "maximum_angular_speed_rad_s") {
+        tuned.maximum_angular_speed_rad_s = value;
+      } else if (name == "maximum_omega_correction_rad_s") {
+        tuned.maximum_omega_correction_rad_s = value;
+      }
+      else return false;
+      if (!whole_vehicle_tracker.setOptions(tuned)) return false;
+      control_message = "EKF parameter updated: " + name;
+      return true;
+    } catch (const std::exception&) {
+      return false;
+    }
+  };
+  const auto applyProjectionDebug = [&](std::string_view action) {
+    constexpr std::string_view prefix = "projection-debug-param:";
+    if (!hasPrefix(action, prefix)) return false;
+    const std::string payload(action.substr(prefix.size()));
+    const std::size_t separator = payload.find(':');
+    if (separator == std::string::npos || separator == 0 ||
+        separator + 1 >= payload.size()) {
+      return false;
+    }
+    const std::string name = payload.substr(0, separator);
+    try {
+      const double value = std::stod(payload.substr(separator + 1));
+      if (!std::isfinite(value)) return false;
+      if (name == "center_x_T_m") projection_debug.center_x_T_m = value;
+      else if (name == "center_y_T_m") projection_debug.center_y_T_m = value;
+      else if (name == "center_z_T_m") projection_debug.center_z_T_m = value;
+      else if (name == "theta_rad") projection_debug.theta_rad = value;
+      else if (name == "radius_even_m") projection_debug.radius_even_m = value;
+      else if (name == "radius_odd_delta_m") {
+        if (std::abs(value) > 1e-12) return false;
+        projection_debug.radius_odd_delta_m = 0.0;
+      }
+      else if (name == "height_odd_delta_m") {
+        if (std::abs(value) > 1e-12) return false;
+        projection_debug.height_odd_delta_m = 0.0;
+      }
+      else return false;
+      if (projection_debug.radius_even_m < 0.05 ||
+          projection_debug.radius_even_m > 0.5 ||
+          std::abs(projection_debug.radius_odd_delta_m) > 0.2 ||
+          std::abs(projection_debug.height_odd_delta_m) > 0.5) {
+        return false;
+      }
+      control_message = "Projection debug parameter updated: " + name;
+      return true;
+    } catch (const std::exception&) {
+      return false;
+    }
+  };
   const auto queueWebCommand = [&](std::string_view action) {
-    constexpr std::array<std::string_view, 11> kKnownActions = {
+    constexpr std::array<std::string_view, 14> kKnownActions = {
         "scene-shooting-range", "scene-energy", "reset", "motion-stop",
         "motion-linear", "motion-spin", "motion-linear-spin", "speed-down",
-        "speed-up", "gimbal-follow-toggle", "gimbal-fire"};
+        "speed-up", "gimbal-follow-toggle", "gimbal-fire", "ekf-reset",
+        "projection-debug-toggle", "projection-debug-anchor-toggle"};
     const std::string_view spin_speed_prefix = "spin-speed:";
     const bool is_spin_speed = hasPrefix(action, spin_speed_prefix);
+    const bool is_ekf_param = hasPrefix(action, "ekf-param:");
+    const bool is_projection_debug_param =
+        hasPrefix(action, "projection-debug-param:");
     if (std::find(kKnownActions.begin(), kKnownActions.end(), action) ==
             kKnownActions.end() &&
-        !is_spin_speed) {
+        !is_spin_speed && !is_ekf_param && !is_projection_debug_param) {
       return false;
     }
     std::lock_guard<std::mutex> lock(web_command_mutex);
@@ -978,7 +1222,37 @@ int main(int argc, char** argv) {
       pending.swap(web_commands);
     }
     for (const std::string& action : pending) {
-      if (action == "scene-shooting-range") {
+      if (hasPrefix(action, "ekf-param:")) {
+        if (!applyEkfTuning(action)) {
+          control_ok = false;
+          control_message = "invalid EKF parameter command";
+        } else {
+          control_ok = true;
+        }
+      } else if (hasPrefix(action, "projection-debug-param:")) {
+        if (!applyProjectionDebug(action)) {
+          control_ok = false;
+          control_message = "invalid projection debug parameter command";
+        } else {
+          control_ok = true;
+        }
+      } else if (action == "projection-debug-toggle") {
+        projection_debug.enabled = !projection_debug.enabled;
+        control_ok = true;
+        control_message = projection_debug.enabled
+                              ? "Projection debug enabled."
+                              : "Projection debug disabled.";
+      } else if (action == "projection-debug-anchor-toggle") {
+        projection_debug.anchor_observed = !projection_debug.anchor_observed;
+        control_ok = true;
+        control_message = projection_debug.anchor_observed
+                              ? "Projection debug anchored to observed E0."
+                              : "Projection debug using manual center/theta.";
+      } else if (action == "ekf-reset") {
+        whole_vehicle_tracker.reset();
+        control_ok = true;
+        control_message = "EKF track reset.";
+      } else if (action == "scene-shooting-range") {
         requestScene(daedalus_sdk::SceneMode::ShootingRange, "shooting-range");
         if (control_ok) requestMotion(scene_state.motion);
       } else if (action == "scene-energy") {
@@ -1189,8 +1463,30 @@ int main(int argc, char** argv) {
             tracker_frame, coordinate_snapshot, poses[index], detections[index],
             constrained_yaw_solver, &reliable_yaw);
         reliable_yaws.push_back(reliable_yaw);
-        if (measurement) tracker_measurements.push_back(*measurement);
+        if (measurement) {
+          tracker_measurements.push_back(*measurement);
+        }
       }
+    }
+    std::optional<yolo_detect::tracking::Measurement> projection_reference;
+    if (projection_debug.enabled && projection_debug.anchor_observed) {
+      projection_debug.has_reference = false;
+      for (const auto& measurement : tracker_measurements) {
+        if (!measurement.has_inward_yaw) continue;
+        projection_reference = measurement;
+        projection_debug.theta_rad = measurement.inward_yaw_T_rad;
+        projection_debug.center_x_T_m =
+            measurement.position_T_m.x() +
+            projection_debug.radius_even_m * std::cos(projection_debug.theta_rad);
+        projection_debug.center_y_T_m =
+            measurement.position_T_m.y() +
+            projection_debug.radius_even_m * std::sin(projection_debug.theta_rad);
+        projection_debug.center_z_T_m = measurement.position_T_m.z();
+        projection_debug.has_reference = true;
+        break;
+      }
+    } else if (projection_debug.enabled) {
+      projection_debug.has_reference = false;
     }
     const yolo_detect::tracking::TrackOutput tracker_output =
         whole_vehicle_tracker.update(header.capture_timestamp_ns,
@@ -1258,6 +1554,9 @@ int main(int argc, char** argv) {
       }
       drawPredictedArmorCenters(annotated, tracker_output, coordinate_snapshot,
                                 camera_calibration);
+      drawProjectionDebugCenters(annotated, projection_debug,
+                                 projection_reference, coordinate_snapshot,
+                                 camera_calibration);
 
       drawText(annotated,
              "YOLO armor: " + std::to_string(detections.size()) +
@@ -1341,6 +1640,9 @@ int main(int argc, char** argv) {
             makeWebTelemetry(header.source_sequence, poses, detection_aims,
                              coordinate_snapshot, coordinate_message,
                              gimbal_control, scene_state, tracker_output,
+                             whole_vehicle_tracker.options(),
+                             constrained_yaw_solver.options(),
+                             projection_debug,
                              reliable_yaws, tracker_measurements));
       }
 

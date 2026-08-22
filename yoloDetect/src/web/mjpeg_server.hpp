@@ -17,7 +17,10 @@ namespace yolo_detect {
 struct WebServerOptions {
   std::string bind_address = "127.0.0.1";
   std::uint16_t port = 8080;
-  int jpeg_quality = 80;
+  // The debug stream must not compete with detection for CPU or bandwidth.
+  int jpeg_quality = 65;
+  int max_image_width = 960;
+  int max_frame_rate = 8;
 };
 
 struct WebPoseTelemetry {
@@ -87,12 +90,65 @@ struct WebTrackerMeasurementTelemetry {
   double yaw_innovation_rad = 0.0;
 };
 
+// Runtime EKF tuning values shown and edited by the web debugger.
+struct WebEkfTuningTelemetry {
+  double initial_position_std_m = 0.25;
+  double initial_velocity_std_mps = 1.0;
+  double initial_theta_std_rad = 0.35;
+  double initial_omega_std_rad_s = 8.0;
+  double initial_geometry_std_m = 0.15;
+  double q_linear_acceleration = 0.02;
+  double q_angular_acceleration = 1.0;
+  double q_geometry = 0.0;
+  double position_std_xy_m = 0.03;
+  double position_std_z_m = 0.08;
+  double yaw_std_rad = 0.12;
+  double reprojection_rms_scale = 0.15;
+  double range_noise_scale_per_m = 0.025;
+  double minimum_quality = 0.05;
+  double single_armor_position_variance_scale = 25.0;
+  double association_position_variance_scale = 100.0;
+  double maximum_multi_armor_position_residual_m = 0.18;
+  double maximum_yaw_update_innovation_rad = 0.35;
+  double maximum_yaw_association_innovation_rad = 1.80;
+  double yaw_phase_cost_std_rad = 0.35;
+  double adjacent_slot_penalty = 0.5;
+  double opposite_slot_penalty = 4.0;
+  double minimum_visibility_cosine = -0.35;
+  double geometry_yaw_consistency_rad = 0.35;
+  double geometry_minimum_baseline_m = 0.08;
+  int geometry_confirming_frames = 1;
+  double nis_gate_3d = 7.815;
+  double nis_gate_4d = 9.488;
+  double maximum_angular_speed_rad_s = 3.0;
+  double maximum_omega_correction_rad_s = 0.05;
+  double yaw_max_reprojection_rms_px = 4.0;
+  double yaw_max_std_rad = 0.45;
+  double yaw_min_facing_cosine = 0.65;
+  double yaw_min_opposite_margin_px = 0.50;
+};
+
+struct WebProjectionDebugTelemetry {
+  bool enabled = false;
+  bool anchor_observed = true;
+  bool has_reference = false;
+  double center_x_T_m = 0.0;
+  double center_y_T_m = 0.0;
+  double center_z_T_m = 0.0;
+  double theta_rad = 0.0;
+  double radius_even_m = 0.15;
+  double radius_odd_delta_m = 0.0;
+  double height_odd_delta_m = 0.0;
+};
+
 struct WebFrameTelemetry {
   std::uint64_t source_sequence = 0;
   std::string scene;
   std::string motion;
   double vehicle_speed_mps = 0.0;
   double spin_speed_deg_s = 0.0;
+  WebEkfTuningTelemetry ekf_tuning;
+  WebProjectionDebugTelemetry projection_debug;
   std::string tracker_state = "uninitialized";
   bool tracker_has_state = false;
   std::size_t tracker_observation_count = 0;

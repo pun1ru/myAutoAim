@@ -169,8 +169,8 @@ void testTwoVisibleArmorsUpdateOneFrame() {
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
   truth.x[tracking::RadiusEven] = 0.32;
-  truth.x[tracking::RadiusOddDelta] = 0.0;
-  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::RadiusOddDelta] = 0.04;
+  truth.x[tracking::HeightOddDelta] = 0.06;
   truth.x[tracking::VelocityX] = 0.0;
   truth.x[tracking::VelocityY] = 0.0;
   truth.x[tracking::VelocityZ] = 0.0;
@@ -191,10 +191,12 @@ void testTwoVisibleArmorsUpdateOneFrame() {
   require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
               std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
           "the second armor observation must reduce radius-prior error");
-  requireNear(output.radius_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-radius delta must remain zero");
-  requireNear(output.height_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-height delta must remain zero");
+  require(std::abs(output.radius_odd_delta_m - truth.x[tracking::RadiusOddDelta]) <
+              std::abs(truth.x[tracking::RadiusOddDelta]),
+          "the second armor observation must reduce odd-radius error");
+  require(std::abs(output.height_odd_delta_m - truth.x[tracking::HeightOddDelta]) <
+              std::abs(truth.x[tracking::HeightOddDelta]),
+          "the second armor observation must reduce odd-height error");
 }
 
 void testReliableSingleArmorHasLowWeightAndCannotMoveGeometry() {
@@ -241,8 +243,8 @@ void testGeometryUpdatesOnFirstConsistentMultiArmorFrame() {
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
   truth.x[tracking::RadiusEven] = 0.32;
-  truth.x[tracking::RadiusOddDelta] = 0.0;
-  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::RadiusOddDelta] = 0.04;
+  truth.x[tracking::HeightOddDelta] = 0.06;
   truth.x[tracking::VelocityX] = 0.0;
   truth.x[tracking::VelocityY] = 0.0;
   truth.x[tracking::VelocityZ] = 0.0;
@@ -256,10 +258,12 @@ void testGeometryUpdatesOnFirstConsistentMultiArmorFrame() {
   require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
               std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
           "the first consistent multi-armor frame must update radius");
-  requireNear(output.radius_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-radius delta must remain zero");
-  requireNear(output.height_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-height delta must remain zero");
+  require(std::abs(output.radius_odd_delta_m - truth.x[tracking::RadiusOddDelta]) <
+              std::abs(truth.x[tracking::RadiusOddDelta]),
+          "the first consistent multi-armor frame must update odd radius");
+  require(std::abs(output.height_odd_delta_m - truth.x[tracking::HeightOddDelta]) <
+              std::abs(truth.x[tracking::HeightOddDelta]),
+          "the first consistent multi-armor frame must update odd height");
 }
 
 void testTemporallyInconsistentYawDoesNotUpdateAngularState() {
@@ -319,8 +323,8 @@ void testPositionOnlySecondArmorConstrainsChassis() {
   options.confirming_hits = 1;
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
-  truth.x[tracking::RadiusEven] = 0.32;
-  truth.x[tracking::RadiusOddDelta] = 0.04;
+  truth.x[tracking::RadiusEven] = options.radius_prior_m;
+  truth.x[tracking::RadiusOddDelta] = 0.0;
   truth.x[tracking::HeightOddDelta] = 0.0;
   truth.x[tracking::VelocityX] = 0.0;
   truth.x[tracking::VelocityY] = 0.0;
@@ -355,10 +359,12 @@ void testPositionOnlySecondArmorConstrainsChassis() {
               std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
           "a reliable yaw plus position-only armor must update even radius: " +
               std::to_string(output.radius_even_m));
-  requireNear(output.radius_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-radius delta must remain zero");
-  requireNear(output.height_odd_delta_m, 0.0, 1e-12,
-              "fixed odd-height delta must remain zero");
+  require(std::abs(output.radius_odd_delta_m - truth.x[tracking::RadiusOddDelta]) <
+              std::abs(truth.x[tracking::RadiusOddDelta]),
+          "a position-only odd board must update odd radius");
+  require(std::abs(output.height_odd_delta_m - truth.x[tracking::HeightOddDelta]) <
+              std::abs(truth.x[tracking::HeightOddDelta]),
+          "a position-only odd board must update odd height");
   const double center_error = (output.center_T_m - expected_center).norm();
   require(center_error < 0.06,
           "a noisy second board must not make the center jump: " +
@@ -371,8 +377,8 @@ void testTwoPositionOnlyArmorsConstrainChassis() {
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
   truth.x[tracking::RadiusEven] = 0.32;
-  truth.x[tracking::RadiusOddDelta] = 0.0;
-  truth.x[tracking::HeightOddDelta] = 0.0;
+  truth.x[tracking::RadiusOddDelta] = 0.04;
+  truth.x[tracking::HeightOddDelta] = 0.06;
   truth.x[tracking::VelocityX] = 0.0;
   truth.x[tracking::VelocityY] = 0.0;
   truth.x[tracking::VelocityZ] = 0.0;

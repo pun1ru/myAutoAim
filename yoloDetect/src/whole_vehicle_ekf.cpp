@@ -158,16 +158,6 @@ WholeVehicleEkf::WholeVehicleEkf(WholeVehicleEkfOptions options)
       options_.maximum_radius_difference_m < 0.0 ||
       !finite(options_.maximum_height_difference_m) ||
       options_.maximum_height_difference_m < 0.0 ||
-      !finite(options_.initial_position_std_m) ||
-      options_.initial_position_std_m <= 0.0 ||
-      !finite(options_.initial_velocity_std_mps) ||
-      options_.initial_velocity_std_mps <= 0.0 ||
-      !finite(options_.initial_theta_std_rad) ||
-      options_.initial_theta_std_rad <= 0.0 ||
-      !finite(options_.initial_omega_std_rad_s) ||
-      options_.initial_omega_std_rad_s <= 0.0 ||
-      !finite(options_.initial_geometry_std_m) ||
-      options_.initial_geometry_std_m <= 0.0 ||
       !finite(options_.q_linear_acceleration) ||
       !finite(options_.q_angular_acceleration) ||
       !finite(options_.q_geometry) || options_.q_linear_acceleration < 0.0 ||
@@ -176,14 +166,6 @@ WholeVehicleEkf::WholeVehicleEkf(WholeVehicleEkfOptions options)
       options_.single_armor_position_variance_scale < 1.0 ||
       !finite(options_.association_position_variance_scale) ||
       options_.association_position_variance_scale < 1.0 ||
-      !finite(options_.position_std_xy_m) || options_.position_std_xy_m <= 0.0 ||
-      !finite(options_.position_std_z_m) || options_.position_std_z_m <= 0.0 ||
-      !finite(options_.yaw_std_rad) || options_.yaw_std_rad <= 0.0 ||
-      !finite(options_.reprojection_rms_scale) ||
-      options_.reprojection_rms_scale < 0.0 ||
-      !finite(options_.range_noise_scale_per_m) ||
-      options_.range_noise_scale_per_m < 0.0 ||
-      !finite(options_.minimum_quality) || options_.minimum_quality <= 0.0 ||
       !finite(options_.maximum_yaw_update_innovation_rad) ||
       options_.maximum_yaw_update_innovation_rad <= 0.0 ||
       !finite(options_.maximum_yaw_association_innovation_rad) ||
@@ -191,13 +173,6 @@ WholeVehicleEkf::WholeVehicleEkf(WholeVehicleEkfOptions options)
           options_.maximum_yaw_update_innovation_rad ||
       !finite(options_.yaw_phase_cost_std_rad) ||
       options_.yaw_phase_cost_std_rad <= 0.0 ||
-      !finite(options_.adjacent_slot_penalty) ||
-      options_.adjacent_slot_penalty < 0.0 ||
-      !finite(options_.opposite_slot_penalty) ||
-      options_.opposite_slot_penalty < 0.0 ||
-      !finite(options_.minimum_visibility_cosine) ||
-      options_.minimum_visibility_cosine < -1.0 ||
-      options_.minimum_visibility_cosine > 1.0 ||
       !finite(options_.geometry_yaw_consistency_rad) ||
       options_.geometry_yaw_consistency_rad <= 0.0 ||
       !finite(options_.geometry_minimum_baseline_m) ||
@@ -211,9 +186,7 @@ WholeVehicleEkf::WholeVehicleEkf(WholeVehicleEkfOptions options)
       !finite(options_.maximum_omega_correction_rad_s) ||
       options_.maximum_omega_correction_rad_s <= 0.0 ||
       !finite(options_.maximum_multi_armor_position_residual_m) ||
-      options_.maximum_multi_armor_position_residual_m <= 0.0 ||
-      !finite(options_.nis_gate_3d) || options_.nis_gate_3d <= 0.0 ||
-      !finite(options_.nis_gate_4d) || options_.nis_gate_4d <= 0.0) {
+      options_.maximum_multi_armor_position_residual_m <= 0.0) {
     throw std::invalid_argument("invalid whole-vehicle EKF options");
   }
 }
@@ -235,17 +208,6 @@ void WholeVehicleEkf::reset() noexcept {
 
 const WholeVehicleEkfOptions& WholeVehicleEkf::options() const noexcept {
   return options_;
-}
-
-bool WholeVehicleEkf::setOptions(WholeVehicleEkfOptions options) noexcept {
-  try {
-    // Reuse the constructor's complete physical/configuration validation.
-    WholeVehicleEkf validated(options);
-    options_ = validated.options_;
-    return true;
-  } catch (...) {
-    return false;
-  }
 }
 
 TrackingState WholeVehicleEkf::trackingState() const noexcept {
@@ -271,9 +233,8 @@ Matrix11 WholeVehicleEkf::processNoise(double dt_s) const {
   addConstantVelocityNoise(CenterZ, VelocityZ, options_.q_linear_acceleration);
   addConstantVelocityNoise(Theta, Omega, options_.q_angular_acceleration);
   noise(RadiusEven, RadiusEven) = options_.q_geometry * dt_s;
-  // dr and dz are intentionally fixed at zero for the current geometry.
-  noise(RadiusOddDelta, RadiusOddDelta) = 0.0;
-  noise(HeightOddDelta, HeightOddDelta) = 0.0;
+  noise(RadiusOddDelta, RadiusOddDelta) = options_.q_geometry * dt_s;
+  noise(HeightOddDelta, HeightOddDelta) = options_.q_geometry * dt_s;
   return noise;
 }
 
@@ -639,10 +600,6 @@ bool WholeVehicleEkf::geometryObservable(
 bool WholeVehicleEkf::applyJointUpdate(
     const std::vector<Measurement>& measurements,
     const std::vector<Association>& associations, bool update_geometry) {
-  // All associations are evaluated against the same predicted State. Stack up
-  // to four 4D observations and make one posterior, rather than applying
-  // detections sequentially. This makes the result independent of detector
-  // ordering and lets two visible plates jointly constrain the vehicle center.
   if (associations.empty() || associations.size() > kArmorSlotCount) return false;
   const State prior = state_;
   const std::size_t yaw_observation_count = static_cast<std::size_t>(
@@ -656,6 +613,11 @@ bool WholeVehicleEkf::applyJointUpdate(
   StackedJacobian h_stacked = StackedJacobian::Zero();
   Vector16 innovation = Vector16::Zero();
   Matrix16 covariance = Matrix16::Identity();
+  const Eigen::Vector3d chassis_velocity(
+      prior.x[VelocityX], prior.x[VelocityY], prior.x[VelocityZ]);
+  const bool stationary_like = chassis_velocity.norm() < 0.30 &&
+                               std::abs(prior.x[Omega]) < 0.30;
+
   for (std::size_t index = 0; index < associations.size(); ++index) {
     const Association& association = associations[index];
     const Measurement& measurement =
@@ -667,11 +629,8 @@ bool WholeVehicleEkf::applyJointUpdate(
     block_innovation.template head<3>() =
         measurement.position_T_m - predicted.position_T_m;
 
-    // At the detector frame rate, a multi-plate residual above this bound is
-    // an association/PnP outlier, even while the target is spinning. Keep its
-    // yaw for phase tracking, but do not let it drag the vehicle center.
     const bool reject_multi_armor_position =
-        !update_geometry && multi_armor_position &&
+        multi_armor_position && stationary_like &&
         block_innovation.template head<3>().norm() >
             options_.maximum_multi_armor_position_residual_m;
 
@@ -728,29 +687,18 @@ bool WholeVehicleEkf::applyJointUpdate(
   Eigen::Matrix<double, kWholeVehicleStateDimension,
                 kMaximumStackedObservationDimension>
       gain = solved.transpose();
-  const bool has_slot_transition = std::any_of(
-      associations.begin(), associations.end(), [this](const Association& association) {
-        return !last_associated_slots_[static_cast<std::size_t>(
-            association.armor_slot)];
-      });
-  const bool has_large_yaw_phase_correction = std::any_of(
-      associations.begin(), associations.end(),
-      [&](const Association& association) {
-        if (!association.includes_yaw) return false;
-        const Measurement& measurement = measurements[static_cast<std::size_t>(
-            association.measurement_index)];
-        const double yaw_innovation = wrapToPi(
-            measurement.inward_yaw_T_rad -
-            observe(prior, association.armor_slot).inward_yaw_T_rad);
-        return std::abs(yaw_innovation) >
-               0.5 * options_.maximum_yaw_update_innovation_rad;
-      });
-  if (has_slot_transition || has_large_yaw_phase_correction) {
-    // A newly selected slot contains a discrete pi/2 phase change. Do not
-    // interpret that phase change as angular acceleration. A large yaw phase
-    // correction may still move theta onto a newly visible plate, but must not
-    // flip omega. Once the slot and yaw residual are stable, subsequent frames
-    // may update omega normally.
+  const bool stable_single_yaw_slot =
+      yaw_observation_count == 1 &&
+      std::any_of(associations.begin(), associations.end(),
+                  [this](const Association& association) {
+                    return association.includes_yaw &&
+                           last_associated_slots_[static_cast<std::size_t>(
+                               association.armor_slot)];
+                  });
+  if (yaw_observation_count < 2 && !stable_single_yaw_slot) {
+    // A slot switch contains a discrete pi/2 phase change. Do not interpret
+    // that one frame as angular acceleration; continuous observations of the
+    // same physical slot may update omega normally.
     gain.row(Omega).setZero();
   }
   if (!position_observable) {
@@ -766,9 +714,6 @@ bool WholeVehicleEkf::applyJointUpdate(
     gain.row(RadiusOddDelta).setZero();
     gain.row(HeightOddDelta).setZero();
   }
-  // The current projection validation assumes all plates share one height.
-  gain.row(RadiusOddDelta).setZero();
-  gain.row(HeightOddDelta).setZero();
 
   const Vector11 raw_correction = gain * innovation;
   if (finite(raw_correction[Omega]) &&
@@ -783,34 +728,13 @@ bool WholeVehicleEkf::applyJointUpdate(
         prior.x[Omega];
     gain.row(Omega) *= bounded_omega_correction / raw_correction[Omega];
   }
-  if (finite(raw_correction[Theta]) &&
-      std::abs(raw_correction[Theta]) > 1e-12) {
-    // A constrained yaw can legitimately move theta when a new plate enters,
-    // but a one-frame correction near pi/2 is a phase/association outlier.
-    // Limit that correction so the four projected points do not spin visibly.
-    constexpr double kMaximumThetaCorrectionRad = 0.45;
-    const double bounded_theta_correction = std::clamp(
-        raw_correction[Theta], -kMaximumThetaCorrectionRad,
-        kMaximumThetaCorrectionRad);
-    gain.row(Theta) *=
-        bounded_theta_correction / raw_correction[Theta];
-  }
 
   state_.x = prior.x + gain * innovation;
-  // Joseph form preserves covariance symmetry/positive semidefiniteness much
-  // better than the short P=(I-KH)P expression under finite precision.
   const Matrix11 residual = Matrix11::Identity() - gain * h_stacked;
   state_.covariance = residual * prior.covariance * residual.transpose() +
                       gain * covariance * gain.transpose();
   state_.covariance =
       0.5 * (state_.covariance + state_.covariance.transpose());
-  // Keep odd radius and height deltas disabled while validating projection.
-  state_.x[RadiusOddDelta] = 0.0;
-  state_.x[HeightOddDelta] = 0.0;
-  state_.covariance.row(RadiusOddDelta).setZero();
-  state_.covariance.col(RadiusOddDelta).setZero();
-  state_.covariance.row(HeightOddDelta).setZero();
-  state_.covariance.col(HeightOddDelta).setZero();
   if (!stateFiniteAndPhysical()) {
     state_ = prior;
     return false;
@@ -841,12 +765,6 @@ bool WholeVehicleEkf::initialize(const Measurement& measurement) {
   state_.covariance(RadiusEven, RadiusEven) = square(options_.initial_geometry_std_m);
   state_.covariance(RadiusOddDelta, RadiusOddDelta) = square(options_.initial_geometry_std_m);
   state_.covariance(HeightOddDelta, HeightOddDelta) = square(options_.initial_geometry_std_m);
-  state_.x[RadiusOddDelta] = 0.0;
-  state_.x[HeightOddDelta] = 0.0;
-  state_.covariance.row(RadiusOddDelta).setZero();
-  state_.covariance.col(RadiusOddDelta).setZero();
-  state_.covariance.row(HeightOddDelta).setZero();
-  state_.covariance.col(HeightOddDelta).setZero();
   if (!stateFiniteAndPhysical()) return false;
   has_state_ = true;
   tracking_state_ = TrackingState::Confirming;
@@ -909,11 +827,6 @@ TrackOutput WholeVehicleEkf::makeOutput(
 
 TrackOutput WholeVehicleEkf::update(
     std::uint64_t timestamp_ns, const std::vector<Measurement>& measurements) {
-  // Per exposure frame:
-  //   validate timestamps -> initialize or predict with exposure dt -> build
-  //   one-to-one E0..E3 associations -> joint Joseph update -> state machine
-  //   transition -> decode E0..E3 for output. A rejected frame is prediction
-  //   only; it never forces a measurement into the posterior.
   if (timestamp_ns == 0) return makeOutput(timestamp_ns);
   for (const Measurement& measurement : measurements) {
     if (!validMeasurement(measurement) || measurement.timestamp_ns != timestamp_ns) {

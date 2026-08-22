@@ -10,28 +10,11 @@
 namespace yolo_detect::tracking {
 
 // 固定维度用于避免运行时动态分配；所有位置使用 T 系米，角度使用 rad。
-// Whole-vehicle tracking architecture, in reading order:
-//   1. tracker_measurement_adapter turns one PnP pose plus the matching
-//      exposure snapshot into a Measurement in tracker frame T.
-//   2. constrained_yaw_solver independently validates inward yaw by
-//      constrained reprojection; PnP rvec is never used as vehicle yaw.
-//   3. WholeVehicleEkf predicts this 11-state vehicle model, associates every
-//      measurement with one physical slot E0..E3, then performs one joint
-//      fixed-size Eigen update for the accepted set.
-//   4. decodeArmor expands the posterior back into E0..E3 for the yellow
-//      image markers and web telemetry.
-//
-// T is fixed to ROS odom for one track: +x forward, +y left, +z up. Every
-// position is meters, every timestamp is exposure time in ns, and angles are
-// radians. Target GroundTruth is deliberately not an input to this pipeline.
 inline constexpr int kWholeVehicleStateDimension = 11;
 inline constexpr int kArmorObservationDimension = 4;
 inline constexpr int kArmorSlotCount = 4;
 
 enum StateIndex : int {
-  // theta is the continuous inward yaw of E0 and is never wrapped in State.
-  // For slot i: phi=theta+i*pi/2, r=r0+(i%2)*dr, z=cz+(i%2)*dz, and
-  // armor center=(cx-r*cos(phi), cy-r*sin(phi), z).
   // 状态排列为 [cx,vx, cy,vy, cz,vz, theta,omega, r0,dr,dz]。
   CenterX = 0,
   VelocityX = 1,
@@ -138,7 +121,7 @@ enum class TrackingState {
 
 struct WholeVehicleEkfOptions {
   // 几何先验：首次只看到一块板时，中心只能由该半径反推。
-  double radius_prior_m = 0.15;
+  double radius_prior_m = 0.18;
   double minimum_radius_m = 0.05;
   double maximum_radius_m = 0.50;
   double maximum_radius_difference_m = 0.12;
@@ -169,7 +152,7 @@ struct WholeVehicleEkfOptions {
   // inconsistent reprojection yaw can still help select a slot, but it must
   // not inject a false angular-velocity correction.
   double maximum_yaw_update_innovation_rad = 0.35;
-  double maximum_yaw_association_innovation_rad = 1.80;
+  double maximum_yaw_association_innovation_rad = 1.40;
   double yaw_phase_cost_std_rad = 0.35;
   double adjacent_slot_penalty = 0.5;
   double opposite_slot_penalty = 4.0;
@@ -231,9 +214,6 @@ class WholeVehicleEkf {
   void reset() noexcept;
 
   [[nodiscard]] const WholeVehicleEkfOptions& options() const noexcept;
-  // Applies tuning without clearing the current track. Initial covariance
-  // fields take effect on the next initialization; Q/R and gates are live.
-  [[nodiscard]] bool setOptions(WholeVehicleEkfOptions options) noexcept;
   [[nodiscard]] TrackingState trackingState() const noexcept;
   [[nodiscard]] bool hasState() const noexcept;
   [[nodiscard]] const State& state() const noexcept;
