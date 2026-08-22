@@ -121,6 +121,35 @@ std::filesystem::path defaultModelPath(const char* executable) {
   return path.parent_path() / "szu_best2_sim_416.onnx";
 }
 
+// Windows development normally keeps yoloDetect and the simulator package in
+// the same workspace. Resolve that package automatically, while preserving an
+// explicit --ipc-dir or TALOS_IPC_DIR as the authoritative configuration.
+std::filesystem::path defaultIpcDirectory(const char* executable) {
+  if (const char* value = std::getenv("TALOS_IPC_DIR");
+      value != nullptr && value[0] != '\0') {
+    return value;
+  }
+#ifdef _WIN32
+  std::error_code error;
+  std::filesystem::path directory =
+      std::filesystem::absolute(executable, error).parent_path();
+  if (error) return {};
+  while (!directory.empty()) {
+    const std::filesystem::path candidate =
+        directory / "1.1.1" / "runtime" / "talos-ipc";
+    if (std::filesystem::is_directory(candidate, error) && !error) {
+      return candidate;
+    }
+    const std::filesystem::path parent = directory.parent_path();
+    if (parent == directory) break;
+    directory = parent;
+  }
+#else
+  static_cast<void>(executable);
+#endif
+  return {};
+}
+
 // 返回 Daedalus 1.3.1 固定分辨率对应的相机标定参数。
 yolo_detect::CameraCalibration simulatorCameraCalibration() {
   yolo_detect::CameraCalibration calibration;
@@ -203,6 +232,8 @@ bool hasPrefix(std::string_view value, std::string_view prefix) {
 Options parseOptions(int argc, char** argv) {
   Options options;
   options.model = defaultModelPath(argv[0]);
+  options.ipc_directory = defaultIpcDirectory(argv[0]);
+  options.use_cuda = !options.cuda_library_directory.empty();
   options.input_size = 416;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
@@ -368,6 +399,7 @@ Options parseOptions(int argc, char** argv) {
       }
     } else if (argument == "--cuda-libs") {
       options.cuda_library_directory = requireValue(index, argc, argv);
+      options.use_cuda = true;
     } else if (argument == "--cpu") {
       options.use_cuda = false;
     } else {

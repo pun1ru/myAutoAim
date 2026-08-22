@@ -88,7 +88,7 @@ bool sendText(Socket socket, const std::string& response) {
 
 // 构建根路径返回的独立浏览器界面。
 std::string htmlPage() {
-  return R"(<!doctype html>
+  std::string page = R"(<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -217,7 +217,8 @@ std::string htmlPage() {
 <p id="control-status">Controls are sent to the detector command queue.</p>
 </aside>
 </main>
-<script>
+)";
+  page += R"(<script>
 const controlStatus = document.getElementById('control-status');
 const followButton = document.getElementById('follow-button');
 const fireButton = document.getElementById('fire-button');
@@ -344,7 +345,8 @@ for (const [name, label, unit, min, max, step] of projectionDebugFields) {
   projectionDebugControls.append(row);
 }
 
-const poseRows = document.getElementById('pose-rows');
+)";
+  page += R"(const poseRows = document.getElementById('pose-rows');
 const ekfRows = document.getElementById('ekf-rows');
 const ekfStateRows = document.getElementById('ekf-state-rows');
 const ekfObservationRows = document.getElementById('ekf-observation-rows');
@@ -489,7 +491,8 @@ async function refreshPose() {
       stateRows.push(row);
     }
     ekfStateRows.replaceChildren(...stateRows);
-    const observationRows = [];
+)";
+  page += R"(    const observationRows = [];
     for (const [index, observation] of (state.tracker_measurements || []).entries()) {
       const row = document.createElement('tr');
       row.className = observation.has_inward_yaw ? 'valid' : 'warning';
@@ -541,6 +544,7 @@ setInterval(refreshPose, 500);
 </body>
 </html>
 )";
+  return page;
 }
 
 }  // namespace

@@ -56,6 +56,35 @@ Linux 构建会将本地可用 ONNX 模型和 ONNX Runtime Provider 库复制到
 
 ## 运行
 
+### Windows local simulator
+
+On this Windows workspace, use the launcher below. It starts the local
+Daedalus simulator only when TCP image port 5602 is not already in use, then
+runs yoloDetect with the matching `1.1.1\\runtime\\talos-ipc` directory.
+It never terminates an existing simulator instance.
+
+```powershell
+.\yoloDetect\run-windows.ps1
+```
+
+For a visible simulator window or the web debugger:
+
+```powershell
+.\yoloDetect\run-windows.ps1 -VisibleSimulator -WebPort 8080
+```
+
+Keep the OpenCV desktop window disabled while retaining the web page:
+
+```powershell
+.\yoloDetect\run-windows.ps1 -NoDisplay -WebPort 8080
+```
+
+The launcher uses the local `trains\models\legacy_robot_detection\0526.onnx`
+with `--imgsz 640` by default. Use `-Model <path>` to override it.
+
+`--ipc-dir` still overrides the automatic Windows IPC path, and all tracking,
+prediction, gimbal, and fire-control behavior is unchanged.
+
 先启动 Daedalus Simulator，再执行：
 
 ```powershell
