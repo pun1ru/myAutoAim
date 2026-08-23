@@ -131,6 +131,9 @@ CoordinateSnapshot makeCoordinateSnapshot(
       !finite(observation.measured_camera_position_odom_m) ||
       !finite(observation.gimbal_yaw_rad) ||
       !finite(observation.gimbal_elevation_rad) ||
+      (observation.has_gimbal_velocity &&
+       (!finite(observation.gimbal_yaw_velocity_rad_s) ||
+        !finite(observation.gimbal_elevation_velocity_rad_s))) ||
       !finite(observation.camera_offset_gimbal_m) ||
       !finite(observation.muzzle_offset_gimbal_m) ||
       !finite(camera_position_tolerance_m) ||
@@ -152,6 +155,11 @@ CoordinateSnapshot makeCoordinateSnapshot(
   snapshot.gimbal_position_odom_m = observation.gimbal_position_odom_m;
   snapshot.gimbal_yaw_rad = observation.gimbal_yaw_rad;
   snapshot.gimbal_elevation_rad = observation.gimbal_elevation_rad;
+  snapshot.has_gimbal_velocity = observation.has_gimbal_velocity;
+  snapshot.gimbal_yaw_velocity_rad_s =
+      observation.gimbal_yaw_velocity_rad_s;
+  snapshot.gimbal_elevation_velocity_rad_s =
+      observation.gimbal_elevation_velocity_rad_s;
   snapshot.camera_offset_gimbal_m = observation.camera_offset_gimbal_m;
   snapshot.muzzle_offset_gimbal_m = observation.muzzle_offset_gimbal_m;
 

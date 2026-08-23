@@ -127,6 +127,8 @@ CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
     last_error_ = coordinateStatusName(invalid.status);
     return invalid;
   }
+  const auto gimbal_state =
+      reader_result.value->readGimbalStateForFrame(frame_sequence);
   CoordinateObservation observation;
   observation.frame_sequence = state.frame_seq;
   observation.capture_timestamp_ns = state.timestamp_ns;
@@ -146,6 +148,15 @@ CoordinateSnapshot SimulatorPoseAdapter::snapshotForFrame(
       vec3(state.camera_position_world);
   observation.gimbal_yaw_rad = state.gimbal_yaw_rad;
   observation.gimbal_elevation_rad = state.gimbal_pitch_rad;
+  if (gimbal_state && gimbal_state.value->frame_seq == frame_sequence) {
+    constexpr double kRadiansPerDegree =
+        3.14159265358979323846 / 180.0;
+    observation.has_gimbal_velocity = true;
+    observation.gimbal_yaw_velocity_rad_s =
+        gimbal_state.value->yaw_velocity_deg_s * kRadiansPerDegree;
+    observation.gimbal_elevation_velocity_rad_s =
+        gimbal_state.value->pitch_velocity_deg_s * kRadiansPerDegree;
+  }
   observation.camera_offset_gimbal_m = camera_offset_gimbal_m_;
   observation.muzzle_offset_gimbal_m = muzzle_offset_gimbal_m_;
 

@@ -1,5 +1,5 @@
 #include "control/gimbal_aim_solver.hpp"
-#include "control/static_target_controller.hpp"
+#include "control/predictive_armor_fire_controller.hpp"
 #include "coordinates/simulator_pose_adapter.hpp"
 #include "detection/yolo_pose_detector.hpp"
 #include "pose/armor_pose_estimator.hpp"
@@ -71,6 +71,11 @@ struct Options {
   bool no_display = false;
   std::filesystem::path record_path;
   double record_fps = 60.0;
+  bool record_raw = false;
+  double record_seconds = 0.0;
+  bool predictive_follow = false;
+  bool fire_on_ready = false;
+  bool auto_fire = false;
   std::string startup_scene = "unchanged";
   std::string scene_after = "unchanged";
   double scene_switch_after = 0.0;
@@ -187,6 +192,11 @@ void printUsage() {
       << "  --no-display         Disable drawing and the visualization window\n"
       << "  --record <path>      Write annotated video; works with --no-display\n"
       << "  --record-fps <fps>   Recorded video playback FPS (default: 60)\n"
+      << "  --record-raw         Record simulator BGR frames without annotations\n"
+      << "  --record-seconds <s> Stop recording after this wall-clock duration\n"
+      << "  --predictive-follow  Start predictive armor following immediately\n"
+      << "  --fire-on-ready      Authorize one predicted shot after tracking is ready\n"
+      << "  --auto-fire          Continuously re-arm predicted fire while tracking\n"
       << "  --scene <name>       Startup scene: unchanged, armor, energy, outpost, shooting-range\n"
       << "  --scene-after <name> Switch to this scene after --scene-switch-after seconds\n"
       << "  --scene-switch-after <s> Timed scene switch (default: disabled)\n"
@@ -339,6 +349,20 @@ Options parseOptions(int argc, char** argv) {
       if (options.record_fps <= 0.0 || options.record_fps > 240.0) {
         throw std::runtime_error("record-fps must be in (0, 240]");
       }
+    } else if (argument == "--record-raw") {
+      options.record_raw = true;
+    } else if (argument == "--record-seconds") {
+      options.record_seconds = std::stod(requireValue(index, argc, argv));
+      if (!std::isfinite(options.record_seconds) ||
+          options.record_seconds <= 0.0) {
+        throw std::runtime_error("record-seconds must be positive");
+      }
+    } else if (argument == "--predictive-follow") {
+      options.predictive_follow = true;
+    } else if (argument == "--fire-on-ready") {
+      options.fire_on_ready = true;
+    } else if (argument == "--auto-fire") {
+      options.auto_fire = true;
     } else if (argument == "--scene") {
       options.startup_scene = requireValue(index, argc, argv);
       if (options.startup_scene != "unchanged" &&
@@ -405,6 +429,12 @@ Options parseOptions(int argc, char** argv) {
     } else {
       throw std::runtime_error("unknown argument: " + argument);
     }
+  }
+  if (options.record_raw && options.record_path.empty()) {
+    throw std::runtime_error("--record-raw requires --record");
+  }
+  if (options.fire_on_ready || options.auto_fire) {
+    options.predictive_follow = true;
   }
   return options;
 }
@@ -690,7 +720,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const std::vector<DetectionAim>& detection_aims,
     const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
     const std::string& coordinate_message,
-    const yolo_detect::control::StaticTargetController& gimbal_control,
+    const yolo_detect::control::PredictiveArmorFireController& gimbal_control,
     const SceneState& scene_state,
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::tracking::WholeVehicleEkfOptions& ekf_options,
@@ -856,15 +886,14 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   telemetry.gimbal_status = gimbal_control.status();
   telemetry.last_gimbal_command_id = gimbal_control.lastCommandId();
   telemetry.last_command_fired = gimbal_control.lastCommandFired();
-  telemetry.static_target_valid =
-      gimbal_control.staticTargetOdomM().has_value();
-  if (gimbal_control.staticTargetOdomM()) {
+  telemetry.static_target_valid = gimbal_control.targetOdomM().has_value();
+  if (gimbal_control.targetOdomM()) {
     telemetry.static_target_odom_x_m =
-        (*gimbal_control.staticTargetOdomM())[0];
+        (*gimbal_control.targetOdomM())[0];
     telemetry.static_target_odom_y_m =
-        (*gimbal_control.staticTargetOdomM())[1];
+        (*gimbal_control.targetOdomM())[1];
     telemetry.static_target_odom_z_m =
-        (*gimbal_control.staticTargetOdomM())[2];
+        (*gimbal_control.targetOdomM())[2];
   }
   telemetry.poses.reserve(poses.size());
   for (std::size_t index = 0; index < poses.size(); ++index) {
@@ -999,7 +1028,9 @@ int main(int argc, char** argv) {
   bool control_ok = control_available;
   daedalus_sdk::UdpGimbalClient gimbal(
       {options.host, options.gimbal_port});
-  yolo_detect::control::StaticTargetController gimbal_control;
+  yolo_detect::control::PredictiveArmorFireController gimbal_control;
+  if (options.predictive_follow) gimbal_control.toggleFollowing();
+  bool fire_on_ready_requested = false;
 
   if (control_available && options.startup_scene != "unchanged") {
     daedalus_sdk::SceneMode startup_scene;
@@ -1061,6 +1092,7 @@ int main(int argc, char** argv) {
   std::size_t latest_pose_count = 0;
   cv::VideoWriter recorder;
   bool recorder_opened = false;
+  std::optional<Clock::time_point> record_started;
 
   auto requestScene = [&](daedalus_sdk::SceneMode requested,
                           const char* name) {
@@ -1072,7 +1104,10 @@ int main(int argc, char** argv) {
     control_ok = reportControl(scene->setScene(requested),
                                std::string("setScene ") + name,
                                control_message);
-    if (control_ok) scene_state.scene = name;
+    if (control_ok) {
+      scene_state.scene = name;
+      whole_vehicle_tracker.reset();
+    }
   };
 
   auto requestMotion = [&](daedalus_sdk::RangeMotionMode requested) {
@@ -1298,6 +1333,7 @@ int main(int argc, char** argv) {
                                    control_message);
         if (control_ok) {
           scene_state.motion = daedalus_sdk::RangeMotionMode::Stationary;
+          whole_vehicle_tracker.reset();
         }
       } else if (action == "motion-stop") {
         requestMotion(daedalus_sdk::RangeMotionMode::Stationary);
@@ -1527,6 +1563,19 @@ int main(int argc, char** argv) {
     const yolo_detect::tracking::TrackOutput tracker_output =
         whole_vehicle_tracker.update(header.capture_timestamp_ns,
                                     tracker_measurements);
+    if (options.fire_on_ready && !fire_on_ready_requested &&
+        tracker_output.has_state &&
+        tracker_output.tracking_state ==
+            yolo_detect::tracking::TrackingState::Tracking) {
+      gimbal_control.requestFire();
+      fire_on_ready_requested = true;
+    }
+    if (options.auto_fire && tracker_output.has_state &&
+        tracker_output.tracking_state ==
+            yolo_detect::tracking::TrackingState::Tracking &&
+        !gimbal_control.firePending()) {
+      gimbal_control.requestFire();
+    }
 
     std::vector<DetectionAim> detection_aims(poses.size());
     if (coordinate_snapshot.valid) {
@@ -1546,24 +1595,11 @@ int main(int argc, char** argv) {
             detection_aims.begin(), detection_aims.end(),
             [](const DetectionAim& item) { return item.aim.valid; }));
 
-    std::optional<cv::Vec3d> capture_candidate_odom_m;
-    double best_reprojection_rms_px =
-        std::numeric_limits<double>::infinity();
-    for (std::size_t index = 0; index < poses.size(); ++index) {
-      if (!poses[index].valid ||
-          !detection_aims[index].coordinate_valid ||
-          !std::isfinite(poses[index].reprojection_rms_px)) {
-        continue;
-      }
-      if (poses[index].reprojection_rms_px < best_reprojection_rms_px) {
-        best_reprojection_rms_px = poses[index].reprojection_rms_px;
-        capture_candidate_odom_m = detection_aims[index].center_odom_m;
-      }
-    }
-
-    const yolo_detect::control::StaticTargetCommand gimbal_command =
-        gimbal_control.update(capture_candidate_odom_m,
-                              coordinate_snapshot);
+    const double processing_latency_s = std::chrono::duration<double>(
+        Clock::now() - inference_started).count();
+    const yolo_detect::control::PredictiveArmorFireCommand gimbal_command =
+        gimbal_control.update(tracker_output, coordinate_snapshot,
+                              processing_latency_s);
     if (gimbal_command.valid) {
       daedalus_sdk::UdpGimbalCommand command;
       command.yaw_deg =
@@ -1574,6 +1610,12 @@ int main(int argc, char** argv) {
       command.fire_advice = gimbal_command.fire;
       const auto sent = gimbal.sendTracked(command);
       if (sent.ok()) {
+        if (gimbal_command.fire) {
+          std::cout << "predictive fire command sent at frame "
+                    << header.source_sequence << " slot E"
+                    << gimbal_command.armor_slot << " horizon "
+                    << fixed(gimbal_command.prediction_horizon_s, 3) << " s\n";
+        }
         gimbal_control.acknowledgeCommand(*sent.value,
                                           gimbal_command.fire);
       } else {
@@ -1707,11 +1749,18 @@ int main(int argc, char** argv) {
                       << " (try an .avi path)\n";
             break;
           }
-          std::cout << "recording annotated video: "
+          record_started = Clock::now();
+          std::cout << "recording " << (options.record_raw ? "raw" : "annotated")
+                    << " video: "
                     << options.record_path.string() << " at "
                     << fixed(options.record_fps, 1) << " FPS\n";
         }
-        recorder.write(annotated);
+        recorder.write(options.record_raw ? bgr : annotated);
+        if (record_started && options.record_seconds > 0.0 &&
+            std::chrono::duration<double>(Clock::now() - *record_started).count() >=
+                options.record_seconds) {
+          break;
+        }
       }
 
       if (!options.no_display) {

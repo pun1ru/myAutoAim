@@ -217,7 +217,7 @@ std::string htmlPage() {
   <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
   <div class="control-row"><span class="control-label">Linear speed</span><button data-action="speed-down">Speed -</button><button data-action="speed-up">Speed +</button><span id="linear-speed-state" class="control-label">0.00 m/s</span></div>
   <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
-  <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
+  <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Predictive Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
 </section>
 <section class="control-panel tuning-panel" aria-label="EKF tuning controls">
   <div class="pose-heading tuning-heading"><h2>EKF Tuning</h2><span class="frame-meta">Live Q/R and gates; initial uncertainties apply after reset</span><button data-action="ekf-reset" type="button">Reset EKF Track</button></div>
@@ -483,7 +483,7 @@ async function refreshPose() {
       ' | yaw ' + state.reliable_yaw_count + '/' + state.tracker_observation_count +
       ' | ' + yawDiagnostic;
     followButton.textContent =
-      state.gimbal_following ? 'Stop Static Follow' : 'Start Static Follow';
+      state.gimbal_following ? 'Stop Predictive Follow' : 'Start Predictive Follow';
     followButton.classList.toggle('active', state.gimbal_following);
     followButton.setAttribute('aria-pressed', String(state.gimbal_following));
     fireButton.disabled = state.fire_pending;

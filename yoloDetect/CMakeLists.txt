@@ -133,6 +133,14 @@ target_link_libraries(whole_vehicle_tracking PUBLIC
     Eigen3::Eigen coordinate_system armor_pose
 )
 
+add_library(predictive_fire STATIC
+    src/control/predictive_armor_fire_controller.cpp
+)
+target_include_directories(predictive_fire PUBLIC src)
+target_link_libraries(predictive_fire PUBLIC
+    gimbal_aim whole_vehicle_tracking
+)
+
 add_executable(yolo_detect
     src/app/main.cpp
     src/detection/yolo_pose_detector.cpp
@@ -149,11 +157,24 @@ target_link_libraries(yolo_detect PRIVATE
     simulator_pose_adapter
     gimbal_aim
     whole_vehicle_tracking
+    predictive_fire
     ${OpenCV_LIBS}
     Threads::Threads
 )
 target_compile_definitions(yolo_detect PRIVATE
     YOLO_DETECT_DEFAULT_CUDA_LIB_DIR="${YOLO_DETECT_CUDA_LIBRARY_DIR}"
+)
+
+add_executable(simulator_raw_recorder
+    src/app/simulator_raw_recorder.cpp
+)
+target_include_directories(simulator_raw_recorder PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+)
+target_link_libraries(simulator_raw_recorder PRIVATE
+    DaedalusSimSdk::DaedalusSimSdk
+    ${OpenCV_LIBS}
+    Threads::Threads
 )
 
 if(WIN32)
@@ -241,6 +262,12 @@ if(MSVC)
   target_compile_definitions(gimbal_aim PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(yolo_detect PRIVATE /utf-8 /W4 /permissive- /EHsc)
   target_compile_definitions(yolo_detect PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(simulator_raw_recorder PRIVATE
+      /utf-8 /W4 /permissive- /EHsc
+  )
+  target_compile_definitions(simulator_raw_recorder PRIVATE
+      WIN32_LEAN_AND_MEAN NOMINMAX
+  )
 endif()
 
 include(CTest)
@@ -290,6 +317,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(coordinate_aim_test PRIVATE gimbal_aim)
 
+  add_executable(predictive_fire_controller_test
+      src/test/predictive_fire_controller_test.cpp
+  )
+  target_link_libraries(predictive_fire_controller_test PRIVATE predictive_fire)
+
   add_executable(whole_vehicle_ekf_test
       src/test/whole_vehicle_ekf_test.cpp
   )
@@ -336,6 +368,18 @@ if(BUILD_TESTING)
     target_compile_definitions(coordinate_aim_test PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX
     )
+    target_compile_options(predictive_fire PRIVATE
+        /utf-8 /W4 /permissive- /EHsc
+    )
+    target_compile_definitions(predictive_fire PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+    )
+    target_compile_options(predictive_fire_controller_test PRIVATE
+        /utf-8 /W4 /permissive- /EHsc
+    )
+    target_compile_definitions(predictive_fire_controller_test PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX
+    )
   endif()
 
   if(MSVC)
@@ -351,6 +395,7 @@ if(BUILD_TESTING)
   add_test(NAME ballistics_unit COMMAND vacuum_ballistic_test)
   add_test(NAME pnp_pose_unit COMMAND pnp_pose_test)
   add_test(NAME coordinate_aim_unit COMMAND coordinate_aim_test)
+  add_test(NAME predictive_fire_controller_unit COMMAND predictive_fire_controller_test)
   add_test(NAME whole_vehicle_ekf_unit COMMAND whole_vehicle_ekf_test)
   add_test(NAME tracker_measurement_adapter_unit
       COMMAND tracker_measurement_adapter_test)

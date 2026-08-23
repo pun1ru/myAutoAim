@@ -38,6 +38,9 @@ struct CoordinateObservation {
   double gimbal_yaw_rad = 0.0;
   // Simulator internal elevation: zero is level, positive is upward.
   double gimbal_elevation_rad = 0.0;
+  bool has_gimbal_velocity = false;
+  double gimbal_yaw_velocity_rad_s = 0.0;
+  double gimbal_elevation_velocity_rad_s = 0.0;
   cv::Vec3d camera_offset_gimbal_m{0.0, 0.0, 0.0};
   cv::Vec3d muzzle_offset_gimbal_m{0.0, 0.0, 0.0};
 };
@@ -52,6 +55,9 @@ struct CoordinateSnapshot {
   cv::Vec3d gimbal_position_odom_m{0.0, 0.0, 0.0};
   double gimbal_yaw_rad = 0.0;
   double gimbal_elevation_rad = 0.0;
+  bool has_gimbal_velocity = false;
+  double gimbal_yaw_velocity_rad_s = 0.0;
+  double gimbal_elevation_velocity_rad_s = 0.0;
   cv::Vec3d camera_offset_gimbal_m{0.0, 0.0, 0.0};
   cv::Vec3d muzzle_offset_gimbal_m{0.0, 0.0, 0.0};
   cv::Vec3d camera_position_odom_m{0.0, 0.0, 0.0};
