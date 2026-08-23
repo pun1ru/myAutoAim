@@ -923,35 +923,20 @@ TrackOutput WholeVehicleEkf::update(
 
   // 未初始化时只接受可靠 yaw；position-only 量测不会凭空确定整车朝向。
   if (!has_state_) {
-    for (const Measurement& measurement : measurements) {
+    for (std::size_t measurement_index = 0;
+         measurement_index < measurements.size(); ++measurement_index) {
+      const Measurement& measurement = measurements[measurement_index];
       if (!initialize(measurement)) continue;
-      const std::vector<Association> matched = associateAll(measurements);
-      std::vector<AssociatedObservation> accepted;
-      accepted.reserve(matched.size());
-      for (const Association& association : matched) {
-        accepted.push_back(makeAssociatedObservation(
-            state_, measurements[static_cast<std::size_t>(
-                        association.measurement_index)],
-            association.measurement_index, association.armor_slot,
-            association.nis, association.includes_yaw));
-      }
-      const bool geometry_observed = geometryObservable(measurements, matched);
-      consecutive_geometry_observations_ = geometry_observed ? 1 : 0;
-      const bool update_geometry =
-          consecutive_geometry_observations_ >=
-          options_.geometry_confirming_frames;
-      if (!matched.empty() &&
-          !applyJointUpdate(measurements, matched, update_geometry) &&
-          !applyJointUpdate(measurements, matched, false)) {
-        reset();
-        return makeOutput(timestamp_ns);
-      }
+      // The first reliable observation defines physical slot E0. Do not run
+      // association or a second joint update against this fresh state: either
+      // can reject/reset a valid first yaw before a prediction exists.
       last_associated_slots_.fill(false);
-      for (const Association& association : matched) {
-        last_associated_slots_[static_cast<std::size_t>(
-            association.armor_slot)] = true;
-      }
-      return makeOutput(timestamp_ns, accepted);
+      last_associated_slots_[0] = true;
+      return makeOutput(
+          timestamp_ns,
+          {makeAssociatedObservation(state_, measurement,
+                                     static_cast<int>(measurement_index), 0,
+                                     0.0, true)});
     }
     return makeOutput(timestamp_ns);
   }

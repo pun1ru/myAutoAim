@@ -73,6 +73,11 @@ struct Measurement {
   // measured in the OpenCV camera frame. It is not a T/odom-origin norm.
   double camera_range_m = 0.0;
   double inward_yaw_T_rad = 0.0;
+  // Raw constrained-yaw candidate for diagnostics. It never enables EKF yaw.
+  bool has_raw_inward_yaw = false;
+  // Pitch inferred from the IPPE plate normal in T. It is diagnostic only.
+  bool has_pnp_inward_pitch_T = false;
+  double pnp_inward_pitch_T_rad = 0.0;
   // The constrained-reprojection yaw uncertainty, in radians. Zero selects
   // the EKF's configured yaw standard deviation for synthetic observations.
   double yaw_std_rad = 0.0;
@@ -138,7 +143,7 @@ enum class TrackingState {
 
 struct WholeVehicleEkfOptions {
   // 几何先验：首次只看到一块板时，中心只能由该半径反推。
-  double radius_prior_m = 0.15;
+  double radius_prior_m = 0.20;
   double minimum_radius_m = 0.05;
   double maximum_radius_m = 0.50;
   double maximum_radius_difference_m = 0.12;
@@ -146,15 +151,15 @@ struct WholeVehicleEkfOptions {
   // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
   // Vehicle-center acceleration spectral density. Armor rotation happens much
   // faster than a chassis can reverse its translational acceleration.
-  double q_linear_acceleration = 0.02;
-  double q_angular_acceleration = 1.0;
+  double q_linear_acceleration = 0.15;
+  double q_angular_acceleration = 2.0;
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
   double q_geometry = 0.0;
   // 基础观测标准差。R 会再按质量、重投影 RMS 和相机量测距离放大。
   double position_std_xy_m = 0.03;
-  double position_std_z_m = 0.08;
-  double yaw_std_rad = 0.12;
+  double position_std_z_m = 0.10;
+  double yaw_std_rad = 0.15;
   double reprojection_rms_scale = 0.15;
   double range_noise_scale_per_m = 0.025;
   // A single plate observes center only through the configured radius and is
@@ -171,8 +176,8 @@ struct WholeVehicleEkfOptions {
   double maximum_yaw_update_innovation_rad = 0.35;
   double maximum_yaw_association_innovation_rad = 1.80;
   double yaw_phase_cost_std_rad = 0.35;
-  double adjacent_slot_penalty = 0.5;
-  double opposite_slot_penalty = 4.0;
+  double adjacent_slot_penalty = 4.0;
+  double opposite_slot_penalty = 6.0;
   double minimum_visibility_cosine = -0.35;
   // Geometry is observable only from distinct slots with a 3D baseline. When
   // both boards have reliable yaw their phase must also be consistent.
@@ -191,12 +196,12 @@ struct WholeVehicleEkfOptions {
   double lost_time_limit_s = 1.5;
   double maximum_frame_dt_s = 0.25;
   double initial_position_std_m = 0.25;
-  double initial_velocity_std_mps = 1.0;
+  double initial_velocity_std_mps = 0.5;
   double initial_theta_std_rad = 0.35;
   double initial_omega_std_rad_s = 8.0;
   double initial_geometry_std_m = 0.15;
-  double maximum_angular_speed_rad_s = 3.0;
-  double maximum_omega_correction_rad_s = 0.05;
+  double maximum_angular_speed_rad_s = 6.0;
+  double maximum_omega_correction_rad_s = 0.15;
   double maximum_multi_armor_position_residual_m = 0.18;
 };
 

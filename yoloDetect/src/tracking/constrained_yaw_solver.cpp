@@ -180,24 +180,12 @@ ReliableYaw ConstrainedYawSolver::solve(
 
   const cv::Matx33d rotation_tracker_from_camera =
       coordinates::cameraRotationOdom(exposure_snapshot);
-  // Keep yaw independent from the PnP Rodrigues yaw, but use the PnP plate
-  // normal only as a pitch constraint. Pose +x_A is the outward normal;
-  // rotationTrackerFromArmor expects the inward normal.
+  // Keep yaw and pitch independent from the PnP Rodrigues rotation. A planar
+  // IPPE pose has an ambiguous normal branch, so its pitch must not override
+  // the fixed physical prior used by the constrained reprojection search.
   double pitch_rad = number_id == options_.outpost_number_id
                          ? options_.outpost_pitch_rad
                          : options_.armor_pitch_rad;
-  const cv::Matx33d& rotation_camera_from_armor =
-      pose.rotation_camera_from_armor;
-  const cv::Vec3d outward_camera(rotation_camera_from_armor(0, 0),
-                                 rotation_camera_from_armor(1, 0),
-                                 rotation_camera_from_armor(2, 0));
-  const cv::Vec3d inward_tracker =
-      -(rotation_tracker_from_camera * outward_camera);
-  if (finite(inward_tracker) && cv::norm(inward_tracker) > 1e-9) {
-    pitch_rad = std::asin(std::clamp(-inward_tracker[2] /
-                                         cv::norm(inward_tracker),
-                                     -1.0, 1.0));
-  }
   double best_yaw = 0.0;
   ProjectionEvaluation best;
   const double step = options_.search_step_rad;
@@ -261,6 +249,7 @@ ReliableYaw ConstrainedYawSolver::solve(
   best = evaluateYaw(best_yaw, rotation_tracker_from_camera, calibration_,
                      pose.armor_size, pose.center_camera_m, image_points,
                      pitch_rad);
+  result.has_candidate_yaw = true;
   result.inward_yaw_T_rad = wrapToPi(best_yaw);
   result.reprojection_rms_px =
       std::sqrt(best.squared_error_px / (2.0 * image_points.size()));
