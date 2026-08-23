@@ -78,6 +78,11 @@ struct Measurement {
   // Pitch inferred from the IPPE plate normal in T. It is diagnostic only.
   bool has_pnp_inward_pitch_T = false;
   double pnp_inward_pitch_T_rad = 0.0;
+  // Both raw IPPE orientation candidates transformed into T. Diagnostics only.
+  bool has_ippe_inward_yaw_0_T = false;
+  double ippe_inward_yaw_0_T_rad = 0.0;
+  bool has_ippe_inward_yaw_1_T = false;
+  double ippe_inward_yaw_1_T_rad = 0.0;
   // The constrained-reprojection yaw uncertainty, in radians. Zero selects
   // the EKF's configured yaw standard deviation for synthetic observations.
   double yaw_std_rad = 0.0;

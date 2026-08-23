@@ -285,6 +285,11 @@ PoseResult ArmorPoseEstimator::estimate(
     cv::Rodrigues(ippe_rvec, ippe_rotation_mat);
     const cv::Matx33d rotation =
         matToMatrix(ippe_rotation_mat) * rotation_ippe_from_armor;
+    if (index < result.ippe_rotation_camera_from_armor.size() &&
+        isFinite(rotation)) {
+      result.ippe_rotation_camera_from_armor[index] = rotation;
+      result.has_ippe_rotation[index] = true;
+    }
     if (!isFinite(rotation) ||
         !allCornersInFront(object_point_array, rotation, tvec)) {
       continue;

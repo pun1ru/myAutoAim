@@ -51,6 +51,10 @@ struct PoseResult {
   cv::Vec3d armor_normal_camera{};  // 装甲板 +x_A 法线在相机 C 中的方向。
   double reprojection_rms_px = std::numeric_limits<double>::infinity();  // RMS 重投影误差。
   std::size_t candidate_count = 0;  // IPPE 返回的原始候选解数量。
+  // The two raw IPPE orientation candidates are retained for web diagnostics.
+  // They are not used by the constrained yaw solver or EKF.
+  std::array<cv::Matx33d, 2> ippe_rotation_camera_from_armor{};
+  std::array<bool, 2> has_ippe_rotation{};
 };
 
 // 将装甲板尺寸枚举转换为配置使用的板型名称。

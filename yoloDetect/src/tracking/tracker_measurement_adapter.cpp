@@ -75,6 +75,27 @@ std::optional<Measurement> makeTrackerMeasurement(
         -inward_tracker[2] / inward_norm, -1.0, 1.0));
     measurement.has_pnp_inward_pitch_T = true;
   }
+  const auto recordIppeYaw = [&](std::size_t candidate_index, bool& has_yaw,
+                                 double& yaw_rad) {
+    if (!pose.has_ippe_rotation[candidate_index]) return;
+    const cv::Matx33d& rotation =
+        pose.ippe_rotation_camera_from_armor[candidate_index];
+    const cv::Vec3d candidate_inward_camera(
+        rotation(0, 0), rotation(1, 0), rotation(2, 0));
+    const cv::Vec3d candidate_inward_tracker =
+        R_TC * candidate_inward_camera;
+    if (!finite(candidate_inward_tracker) ||
+        cv::norm(candidate_inward_tracker) <= 1e-9) {
+      return;
+    }
+    yaw_rad = std::atan2(candidate_inward_tracker[1],
+                         candidate_inward_tracker[0]);
+    has_yaw = finite(yaw_rad);
+  };
+  recordIppeYaw(0, measurement.has_ippe_inward_yaw_0_T,
+                measurement.ippe_inward_yaw_0_T_rad);
+  recordIppeYaw(1, measurement.has_ippe_inward_yaw_1_T,
+                measurement.ippe_inward_yaw_1_T_rad);
   measurement.confidence = detection.confidence;
   measurement.color_id = detection.color_id;
   measurement.number_id = detection.number_id;

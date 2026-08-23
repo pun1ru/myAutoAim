@@ -74,6 +74,12 @@ struct WebTrackerMeasurementTelemetry {
   bool has_pnp_inward_pitch_T = false;
   double inward_yaw_rad = 0.0;
   double pnp_inward_pitch_rad = 0.0;
+  bool has_ippe_yaw_0 = false;
+  double ippe_yaw_0_rad = 0.0;
+  bool has_ippe_yaw_1 = false;
+  double ippe_yaw_1_rad = 0.0;
+  bool has_reprojected_yaw = false;
+  double reprojected_yaw_rad = 0.0;
   double yaw_std_rad = 0.0;
   double reprojection_rms_px = 0.0;
   double confidence = 0.0;

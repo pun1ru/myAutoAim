@@ -39,6 +39,10 @@ function Test-LocalTcpPort([int]$Port) {
     }
 }
 
+function Test-LocalUdpListener([int]$Port) {
+    return @(Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0
+}
+
 if (-not (Test-Path -LiteralPath $detector)) {
     if ($SkipBuild) {
         throw "yolo_detect.exe is missing and -SkipBuild was supplied: $detector"
@@ -50,7 +54,13 @@ if (-not (Test-Path -LiteralPath $detector)) {
     if ($LASTEXITCODE -ne 0) { throw 'yoloDetect build failed.' }
 }
 
-if (-not (Test-LocalTcpPort 5602)) {
+$imageTransportReady = Test-LocalTcpPort 5602
+$sceneControlReady = Test-LocalUdpListener 5603
+if ($imageTransportReady -ne $sceneControlReady) {
+    throw "Incomplete Daedalus simulator instance: TCP image port 5602=$imageTransportReady, scene-control UDP port 5603=$sceneControlReady. Stop the stale instance before restarting."
+}
+
+if (-not $imageTransportReady) {
     $simulatorArguments = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $simulatorLauncher,
         '-IpcDir', $ipcDirectory
@@ -61,18 +71,24 @@ if (-not (Test-LocalTcpPort 5602)) {
     Write-Host "Started Daedalus simulator (PID $($simulator.Id))."
 
     $ready = $false
+    $stableReadyChecks = 0
     for ($attempt = 0; $attempt -lt 100; ++$attempt) {
-        if (Test-LocalTcpPort 5602) {
-            $ready = $true
-            break
+        if ((Test-LocalTcpPort 5602) -and (Test-LocalUdpListener 5603)) {
+            ++$stableReadyChecks
+            if ($stableReadyChecks -ge 5) {
+                $ready = $true
+                break
+            }
+        } else {
+            $stableReadyChecks = 0
         }
         Start-Sleep -Milliseconds 200
     }
     if (-not $ready) {
-        throw 'Daedalus simulator did not open TCP image port 5602 within 20 seconds.'
+        throw 'Daedalus simulator did not open both TCP image port 5602 and scene-control UDP port 5603 within 20 seconds.'
     }
 } else {
-    Write-Host 'Reusing the simulator already listening on TCP 5602.'
+    Write-Host 'Reusing the simulator listening on TCP 5602 and UDP 5603.'
 }
 
 $arguments = @('--ipc-dir', $ipcDirectory)

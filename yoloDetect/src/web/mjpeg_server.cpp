@@ -108,7 +108,7 @@ std::string htmlPage() {
   .debug-section.pose { height: 260px; }
   .debug-section.predicted { height: 214px; }
   .debug-section.state { height: 154px; }
-   .debug-section.observations { height: 628px; }
+   .debug-section.observations { height: 860px; }
   p, #control-status, #pose-frame { color: #aab7c0; font-size: 14px; }
   .pose-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 42px; padding-top: 12px; }
   .frame-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: #aab7c0; font-size: 14px; }
@@ -123,6 +123,24 @@ std::string htmlPage() {
    .xy-map .observed { fill: #15191d; stroke: #f0c75e; stroke-width: 2; }
    .xy-map .camera { fill: #d4655f; stroke: #ffe0d3; stroke-width: 1.5; }
    .xy-map .legend { font-size: 11px; fill: #d8e1e6; }
+   .yaw-chart { height: 212px; margin-top: 12px; border: 1px solid #39464f; background: #111619; }
+   .yaw-chart-heading { display: flex; justify-content: space-between; gap: 12px; padding: 7px 10px 0; color: #d8e1e6; font-size: 12px; }
+   .yaw-chart-heading span:last-child { color: #aab7c0; font-variant-numeric: tabular-nums; text-align: right; }
+   .yaw-chart svg { display: block; width: 100%; height: calc(100% - 25px); }
+   .yaw-chart text { font-family: system-ui, sans-serif; font-size: 11px; fill: #aab7c0; }
+   .yaw-chart .axis { stroke: #596771; stroke-width: 1; }
+   .yaw-chart .grid { stroke: #2b353c; stroke-width: 1; }
+   .yaw-chart .zero { stroke: #596771; stroke-width: 1.5; }
+   .yaw-chart .detected { fill: none; stroke: #f0c75e; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+   .yaw-chart .predicted-yaw { fill: none; stroke: #75b8eb; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+   .yaw-chart .ekf-yaw { fill: none; stroke: #75c6a4; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+   .yaw-chart .latest { stroke-width: 1.5; }
+   .yaw-chart .latest.detected { fill: #f0c75e; stroke: #fff0c2; }
+   .yaw-chart .latest.predicted-yaw { fill: #75b8eb; stroke: #d9efff; }
+   .yaw-chart .latest.ekf-yaw { fill: #75c6a4; stroke: #d8f5e8; }
+   .yaw-chart .legend-detected { fill: #f0c75e; }
+   .yaw-chart .legend-predicted { fill: #75b8eb; }
+   .yaw-chart .legend-ekf { fill: #75c6a4; }
   table { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { height: 36px; padding: 7px 9px; text-align: right; white-space: nowrap; border-bottom: 1px solid #2b353c; font-size: 12px; }
   th, td { min-width: 82px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
@@ -204,12 +222,16 @@ std::string htmlPage() {
   <div class="pose-heading"><h2 id="ekf-observation-title">EKF Measurements and Association (T)</h2></div>
   <div class="observation-table-wrap">
     <table>
-      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>Measured yaw deg</th><th>IPPE pitch deg</th><th>Predicted yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
-      <tbody id="ekf-observation-rows"><tr><td colspan="27">No EKF measurements</td></tr></tbody>
+      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>IPPE 0 out deg</th><th>IPPE 1 out deg</th><th>Reproj out deg</th><th>IPPE pitch deg</th><th>Predicted yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
+      <tbody id="ekf-observation-rows"><tr><td colspan="29">No EKF measurements</td></tr></tbody>
     </table>
   </div>
   <div class="xy-map" aria-label="EKF armor and camera XY projection">
     <svg id="ekf-xy-map" viewBox="0 0 560 310" role="img" aria-label="Armor and camera positions in tracker XY coordinates"></svg>
+  </div>
+  <div class="yaw-chart" aria-label="Selected armor outward yaw comparison">
+    <div class="yaw-chart-heading"><span>Outward yaw: detection / prediction / EKF</span><span id="inward-yaw-label">Waiting for armor yaw</span></div>
+    <svg id="inward-yaw-chart" viewBox="0 0 560 185" role="img" aria-label="Detected, predicted, and EKF outward yaw over the latest twelve seconds"></svg>
   </div>
 </section>
 <section class="control-panel" aria-label="Simulator controls">
@@ -242,6 +264,10 @@ const spinSpeedState = document.getElementById('spin-speed-state');
 const spinSpeedApply = document.getElementById('spin-speed-apply');
 const ekfTuningControls = document.getElementById('ekf-tuning-controls');
 const projectionDebugControls = document.getElementById('projection-debug-controls');
+const ekfDraftValues = new Map();
+const ekfPendingValues = new Map();
+const projectionDraftValues = new Map();
+const projectionPendingValues = new Map();
 async function sendControl(action, button) {
   if (button) button.disabled = true;
   controlStatus.textContent = 'Sending ' + action + '...';
@@ -249,8 +275,10 @@ async function sendControl(action, button) {
     const response = await fetch('/api/control?action=' + encodeURIComponent(action), { cache: 'no-store' });
     const result = await response.json();
     controlStatus.textContent = result.message;
+    return response.ok;
   } catch (_) {
     controlStatus.textContent = 'Control request failed.';
+    return false;
   } finally {
     if (button) button.disabled = false;
   }
@@ -319,13 +347,21 @@ for (const [group, name, label, unit, min, max, step] of ekfTuningFields) {
     '<span class="ekf-unit">' + unit + '</span><button class="ekf-apply" type="button">Apply</button>';
   const input = row.querySelector('input');
   const button = row.querySelector('button');
-  button.addEventListener('click', () => {
+  input.addEventListener('input', () => {
+    ekfDraftValues.set(name, input.value);
+    ekfPendingValues.delete(name);
+  });
+  button.addEventListener('click', async () => {
     const value = Number(input.value);
     if (!Number.isFinite(value) || value < min || value > max) {
       controlStatus.textContent = label + ' is out of range.';
       return;
     }
-    sendControl('ekf-param:' + name + ':' + value, button);
+    ekfDraftValues.set(name, input.value);
+    ekfPendingValues.set(name, value);
+    if (!await sendControl('ekf-param:' + name + ':' + value, button)) {
+      ekfPendingValues.delete(name);
+    }
   });
   ekfTuningControls.append(row);
 }
@@ -347,13 +383,21 @@ for (const [name, label, unit, min, max, step] of projectionDebugFields) {
     '<span class="ekf-unit">' + unit + '</span><button class="ekf-apply" type="button">Apply</button>';
   const input = row.querySelector('input');
   const button = row.querySelector('button');
-  button.addEventListener('click', () => {
+  input.addEventListener('input', () => {
+    projectionDraftValues.set(name, input.value);
+    projectionPendingValues.delete(name);
+  });
+  button.addEventListener('click', async () => {
     const value = Number(input.value);
     if (!Number.isFinite(value) || value < min || value > max) {
       controlStatus.textContent = label + ' is out of range.';
       return;
     }
-    sendControl('projection-debug-param:' + name + ':' + value, button);
+    projectionDraftValues.set(name, input.value);
+    projectionPendingValues.set(name, value);
+    if (!await sendControl('projection-debug-param:' + name + ':' + value, button)) {
+      projectionPendingValues.delete(name);
+    }
   });
   projectionDebugControls.append(row);
 }
@@ -372,7 +416,34 @@ const cell = (text) => {
   return element;
 };
 const metric = (value, digits) => typeof value === 'number' ? value.toFixed(digits) : '-';
+const parameterValuesMatch = (actual, expected) =>
+  Number.isFinite(actual) && Math.abs(actual - expected) <=
+    1e-9 * Math.max(1, Math.abs(actual), Math.abs(expected));
+function refreshParameterInputs(container, parameterValues, drafts, pending, selector, datasetKey) {
+  for (const input of container.querySelectorAll(selector)) {
+    const name = input.dataset[datasetKey];
+    const actual = parameterValues[name];
+    if (typeof actual !== 'number') continue;
+    const draft = drafts.get(name);
+    if (draft !== undefined) {
+      const expected = pending.get(name);
+      if (expected !== undefined && parameterValuesMatch(actual, expected)) {
+        pending.delete(name);
+        drafts.delete(name);
+      } else {
+        input.value = draft;
+        continue;
+      }
+    }
+    if (document.activeElement !== input) input.value = actual;
+  }
+}
 const trackerXyMap = document.getElementById('ekf-xy-map');
+const inwardYawChart = document.getElementById('inward-yaw-chart');
+const inwardYawLabel = document.getElementById('inward-yaw-label');
+const inwardYawHistory = [];
+let inwardYawSeriesKey = '';
+let inwardYawLastSequence = null;
 const svgElement = (name, attributes = {}) => {
   const element = document.createElementNS('http://www.w3.org/2000/svg', name);
   for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
@@ -463,6 +534,134 @@ function renderTrackerXyMap(state) {
   legend.textContent = 'filled: predicted  diamond: measurement  triangle: camera';
   trackerXyMap.append(legend);
 }
+const wrapToPi = (angleRad) => {
+  const wrapped = (angleRad + Math.PI) % (2 * Math.PI);
+  return (wrapped < 0 ? wrapped + 2 * Math.PI : wrapped) - Math.PI;
+};
+const wrappedYawDeg = (angleRad) => wrapToPi(angleRad) * 180 / Math.PI;
+const outwardYawDeg = (inwardYawRad) => wrappedYawDeg(inwardYawRad + Math.PI);
+)";
+  page += R"(function selectedInwardYawMeasurement(state) {
+  const candidates = (state.tracker_measurements || [])
+    .map((measurement, index) => ({ measurement, index }))
+    .filter(({ measurement }) => measurement.has_raw_inward_yaw &&
+      Number.isFinite(measurement.inward_yaw_rad));
+  if (candidates.length === 0) return null;
+
+  const associated = candidates.filter(({ measurement }) =>
+    measurement.association_valid && Number.isInteger(measurement.associated_slot) &&
+    measurement.associated_slot >= 0);
+  const current = associated.find(({ measurement }) =>
+    inwardYawSeriesKey === 'slot:' + measurement.associated_slot);
+  const selected = current || associated[0] || candidates[0];
+  const slot = selected.measurement.association_valid &&
+    Number.isInteger(selected.measurement.associated_slot) &&
+    selected.measurement.associated_slot >= 0
+    ? selected.measurement.associated_slot
+    : null;
+  const key = slot === null ? 'measurement:' + selected.index : 'slot:' + slot;
+  const ekfYawDeg = slot !== null && state.tracker_has_state &&
+    Number.isFinite(state.tracker_theta_rad)
+    ? outwardYawDeg(state.tracker_theta_rad + slot * Math.PI * 0.5)
+    : null;
+  return {
+    key,
+    name: slot === null ? 'M' + (selected.index + 1) : 'E' + slot,
+    detectedYawDeg: outwardYawDeg(selected.measurement.inward_yaw_rad),
+    predictedYawDeg: slot !== null && Number.isFinite(selected.measurement.predicted_yaw_rad)
+      ? outwardYawDeg(selected.measurement.predicted_yaw_rad)
+      : null,
+    ekfYawDeg
+  };
+}
+function renderInwardYawChart(state) {
+  const selected = selectedInwardYawMeasurement(state);
+  if (!selected) {
+    inwardYawSeriesKey = '';
+    inwardYawLastSequence = null;
+    inwardYawHistory.length = 0;
+    inwardYawLabel.textContent = 'Waiting for armor yaw';
+  } else {
+    if (inwardYawSeriesKey !== selected.key) {
+      inwardYawSeriesKey = selected.key;
+      inwardYawLastSequence = null;
+      inwardYawHistory.length = 0;
+    }
+    if (inwardYawLastSequence !== state.source_sequence) {
+      inwardYawHistory.push({ time: performance.now() / 1000, ...selected });
+      inwardYawLastSequence = state.source_sequence;
+    }
+    const value = (yawDeg) => Number.isFinite(yawDeg) ? yawDeg.toFixed(2) : '-';
+    inwardYawLabel.textContent = selected.name + ' | D ' + value(selected.detectedYawDeg) +
+      ' P ' + value(selected.predictedYawDeg) + ' EKF ' + value(selected.ekfYawDeg) + ' deg';
+  }
+
+  const now = performance.now() / 1000;
+  const historySeconds = 12;
+  while (inwardYawHistory.length > 0 && inwardYawHistory[0].time < now - historySeconds) {
+    inwardYawHistory.shift();
+  }
+  inwardYawChart.replaceChildren();
+  const left = 48, top = 24, width = 482, height = 124;
+  const mapX = (time) => left + (time - (now - historySeconds)) / historySeconds * width;
+  const mapY = (yawDeg) => top + (180 - yawDeg) / 360 * height;
+  const chartLegend = [
+    ['Detected', 'legend-detected', left],
+    ['Predicted (wrapped)', 'legend-predicted', left + 118],
+    ['EKF output', 'legend-ekf', left + 292]
+  ];
+  for (const [label, className, x] of chartLegend) {
+    const text = svgElement('text', { x, y: 12, class: className });
+    text.textContent = label;
+    inwardYawChart.append(text);
+  }
+  inwardYawChart.append(svgElement('rect', { x: left, y: top, width, height, fill: 'none', class: 'axis' }));
+  for (const yawDeg of [-180, -90, 0, 90, 180]) {
+    const y = mapY(yawDeg);
+    inwardYawChart.append(svgElement('line', { x1: left, y1: y, x2: left + width, y2: y, class: yawDeg === 0 ? 'zero' : 'grid' }));
+    const label = svgElement('text', { x: left - 7, y: y + 4, 'text-anchor': 'end' });
+    label.textContent = yawDeg + ' deg';
+    inwardYawChart.append(label);
+  }
+  for (const elapsed of [12, 9, 6, 3, 0]) {
+    const x = left + (historySeconds - elapsed) / historySeconds * width;
+    inwardYawChart.append(svgElement('line', { x1: x, y1: top, x2: x, y2: top + height, class: 'grid' }));
+    const label = svgElement('text', { x, y: top + height + 18, 'text-anchor': 'middle' });
+    label.textContent = elapsed === 0 ? 'now' : '-' + elapsed + ' s';
+    inwardYawChart.append(label);
+  }
+  const appendSeries = (field, className) => {
+    let path = '';
+    let previous = null;
+    let latest = null;
+    for (const point of inwardYawHistory) {
+      const yawDeg = point[field];
+      if (!Number.isFinite(yawDeg)) {
+        previous = null;
+        continue;
+      }
+      const command = !previous || Math.abs(yawDeg - previous.yawDeg) > 180 ? 'M' : 'L';
+      path += command + ' ' + mapX(point.time).toFixed(2) + ' ' + mapY(yawDeg).toFixed(2) + ' ';
+      previous = { yawDeg };
+      latest = point;
+    }
+    if (!latest) return false;
+    inwardYawChart.append(svgElement('path', { d: path, class: className }));
+    inwardYawChart.append(svgElement('circle', {
+      cx: mapX(latest.time), cy: mapY(latest[field]), r: 3.5,
+      class: 'latest ' + className
+    }));
+    return true;
+  };
+  const hasDetected = appendSeries('detectedYawDeg', 'detected');
+  appendSeries('predictedYawDeg', 'predicted-yaw');
+  appendSeries('ekfYawDeg', 'ekf-yaw');
+  if (!hasDetected) {
+    const message = svgElement('text', { x: left + width * 0.5, y: top + height * 0.5, 'text-anchor': 'middle' });
+    message.textContent = 'No valid outward yaw measurement';
+    inwardYawChart.append(message);
+  }
+}
 // 独立于 MJPEG 图像流刷新遥测数据。
 async function refreshPose() {
   if (refreshPose.pending) return;
@@ -472,6 +671,7 @@ async function refreshPose() {
     if (!response.ok) return;
     const state = await response.json();
     renderTrackerXyMap(state);
+    renderInwardYawChart(state);
     poseFrame.textContent = 'Frame ' + state.source_sequence;
     coordinateState.textContent = state.coordinate_valid
       ? 'Odom ready | camera offset error ' + metric(state.camera_position_error_m, 4) + ' m'
@@ -499,21 +699,15 @@ async function refreshPose() {
       spinSpeedInput.value = metric(state.spin_speed_deg_s, 1);
     }
     const tuning = state.ekf_tuning || {};
-    for (const input of ekfTuningControls.querySelectorAll('input[data-ekf-name]')) {
-      if (document.activeElement !== input && typeof tuning[input.dataset.ekfName] === 'number') {
-        input.value = tuning[input.dataset.ekfName];
-      }
-    }
+    refreshParameterInputs(ekfTuningControls, tuning, ekfDraftValues,
+      ekfPendingValues, 'input[data-ekf-name]', 'ekfName');
     const debug = state.projection_debug || {};
     const debugToggle = document.querySelector('[data-action="projection-debug-toggle"]');
     const debugAnchorToggle = document.querySelector('[data-action="projection-debug-anchor-toggle"]');
     if (debugToggle) debugToggle.textContent = debug.enabled ? 'Disable' : 'Enable';
     if (debugAnchorToggle) debugAnchorToggle.textContent = debug.anchor_observed ? 'Anchor: observed' : 'Anchor: manual';
-    for (const input of projectionDebugControls.querySelectorAll('input[data-projection-name]')) {
-      if (document.activeElement !== input && typeof debug[input.dataset.projectionName] === 'number') {
-        input.value = debug[input.dataset.projectionName];
-      }
-    }
+    refreshParameterInputs(projectionDebugControls, debug, projectionDraftValues,
+      projectionPendingValues, 'input[data-projection-name]', 'projectionName');
     const rows = [];
     for (const pose of state.poses) {
       const row = document.createElement('tr');
@@ -608,8 +802,12 @@ async function refreshPose() {
       row.append(cell(metric(observation.camera_range_m, 3)));
       row.append(cell(observation.has_inward_yaw ? 'yes' : 'no'));
       row.append(cell(observation.yaw_used ? 'yes' : 'no'));
-      row.append(cell(observation.has_raw_inward_yaw
-        ? metric(observation.inward_yaw_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(observation.has_ippe_yaw_0
+        ? metric(outwardYawDeg(observation.ippe_yaw_0_rad), 2) : '-'));
+      row.append(cell(observation.has_ippe_yaw_1
+        ? metric(outwardYawDeg(observation.ippe_yaw_1_rad), 2) : '-'));
+      row.append(cell(observation.has_reprojected_yaw
+        ? metric(outwardYawDeg(observation.reprojected_yaw_rad), 2) : '-'));
       row.append(cell(observation.has_pnp_inward_pitch_T
         ? metric(observation.pnp_inward_pitch_rad * 180 / Math.PI, 2) : '-'));
       row.append(cell(observation.association_valid ? metric(observation.predicted_yaw_rad * 180 / Math.PI, 2) : '-'));
@@ -636,7 +834,7 @@ async function refreshPose() {
     if (observationRows.length === 0) {
       const row = document.createElement('tr');
       const empty = cell('No EKF measurements');
-      empty.colSpan = 27;
+      empty.colSpan = 29;
       row.append(empty);
       observationRows.push(row);
     }
@@ -940,6 +1138,16 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << ",\"inward_yaw_rad\":" << measurement.inward_yaw_rad
            << ",\"pnp_inward_pitch_rad\":"
            << measurement.pnp_inward_pitch_rad
+           << ",\"has_ippe_yaw_0\":"
+           << (measurement.has_ippe_yaw_0 ? "true" : "false")
+           << ",\"ippe_yaw_0_rad\":" << measurement.ippe_yaw_0_rad
+           << ",\"has_ippe_yaw_1\":"
+           << (measurement.has_ippe_yaw_1 ? "true" : "false")
+           << ",\"ippe_yaw_1_rad\":" << measurement.ippe_yaw_1_rad
+           << ",\"has_reprojected_yaw\":"
+           << (measurement.has_reprojected_yaw ? "true" : "false")
+           << ",\"reprojected_yaw_rad\":"
+           << measurement.reprojected_yaw_rad
            << ",\"yaw_std_rad\":" << measurement.yaw_std_rad
            << ",\"reprojection_rms_px\":"
            << measurement.reprojection_rms_px
