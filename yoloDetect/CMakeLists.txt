@@ -6,8 +6,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(DaedalusSimSdk 1.3.1 REQUIRED CONFIG)
-find_package(Eigen3 3.3 QUIET NO_MODULE)
+# The Windows simulator package bundled with this workspace provides SDK 1.1.
+# The consumer only uses the stable TCP, Talos metadata, scene-control, and
+# UDP gimbal APIs shared by the 1.1 and 1.3 simulator releases.
+find_package(DaedalusSimSdk 1.1 REQUIRED CONFIG)
+find_package(Eigen3 QUIET NO_MODULE)
 if(NOT Eigen3_FOUND)
   find_path(EIGEN3_INCLUDE_DIR Eigen/Core)
   if(NOT EIGEN3_INCLUDE_DIR)
@@ -17,6 +20,8 @@ if(NOT Eigen3_FOUND)
   set_target_properties(Eigen3::Eigen PROPERTIES
       INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"
   )
+elseif(DEFINED Eigen3_VERSION AND Eigen3_VERSION VERSION_LESS 3.3)
+  message(FATAL_ERROR "Eigen 3.3 or later is required for whole_vehicle_tracking")
 endif()
 find_package(OpenCV 4 REQUIRED COMPONENTS calib3d core highgui imgcodecs imgproc videoio)
 find_package(Threads REQUIRED)
@@ -74,11 +79,13 @@ endif()
 
 if(WIN32)
   set(YOLO_DETECT_CUDA_LIBRARY_DIR
-      "${CMAKE_CURRENT_SOURCE_DIR}/../trains/.venv/Lib/site-packages/torch/lib")
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../trains/.venv/Lib/site-packages/torch/lib")
   if(NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudart64_12.dll" OR
      NOT EXISTS "${YOLO_DETECT_CUDA_LIBRARY_DIR}/cudnn64_9.dll")
-    message(FATAL_ERROR
-        "CUDA 12/cuDNN 9 runtime DLLs were not found in ${YOLO_DETECT_CUDA_LIBRARY_DIR}")
+    message(WARNING
+        "CUDA 12/cuDNN 9 runtime DLLs were not found in ${YOLO_DETECT_CUDA_LIBRARY_DIR}; "
+        "yolo_detect will default to ONNX Runtime CPU. Pass --cuda-libs after installing them to enable CUDA.")
+    set(YOLO_DETECT_CUDA_LIBRARY_DIR "")
   endif()
 else()
   set(YOLO_DETECT_CUDA_LIBRARY_DIR "")
@@ -158,9 +165,6 @@ if(WIN32)
       "${CMAKE_CURRENT_SOURCE_DIR}/models/szu_best2_sim_416.onnx"
       "$<TARGET_FILE_DIR:yolo_detect>/szu_best2_sim_416.onnx"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      "${CMAKE_CURRENT_SOURCE_DIR}/../RobotDetectionModel/Model/0526.onnx"
-      "$<TARGET_FILE_DIR:yolo_detect>/robot_armor_0526.onnx"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "$<TARGET_FILE:onnxruntime>"
       "$<TARGET_FILE_DIR:yolo_detect>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -169,6 +173,16 @@ if(WIN32)
       "$<TARGET_FILE_DIR:yolo_detect>"
     COMMAND_EXPAND_LISTS
   )
+
+  set(YOLO_DETECT_ROBOT_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../trains/models/legacy_robot_detection/0526.onnx")
+  if(EXISTS "${YOLO_DETECT_ROBOT_MODEL}")
+    add_custom_command(TARGET yolo_detect POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${YOLO_DETECT_ROBOT_MODEL}"
+        "$<TARGET_FILE_DIR:yolo_detect>/robot_armor_0526.onnx"
+    )
+  endif()
 
   set(YOLO_DETECT_ZLIB_DLL
       "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/z.dll")
@@ -210,6 +224,9 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if(MSVC)
+  # Headers and tests contain UTF-8 comments and string literals. Apply the
+  # encoding consistently instead of relying on the active Windows code page.
+  add_compile_options(/utf-8)
   target_compile_options(ballistics PRIVATE /utf-8 /W4 /permissive- /EHsc)
   target_compile_definitions(ballistics PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(armor_pose PRIVATE /utf-8 /W4 /permissive- /EHsc)

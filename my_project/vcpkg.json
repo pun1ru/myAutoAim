@@ -4,11 +4,14 @@
   "version-string": "0.1.0",
   "builtin-baseline": "2273a28f34ce5aac8be50b3b6b44da7fc1722e06",
   "dependencies": [
+    "eigen3",
     {
       "name": "opencv4",
       "default-features": false,
       "features": [
+        "calib3d",
         "highgui",
+        "jpeg",
         "win32ui"
       ]
     }
