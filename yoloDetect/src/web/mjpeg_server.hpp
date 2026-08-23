@@ -66,8 +66,14 @@ struct WebTrackerMeasurementTelemetry {
   double y_T_m = 0.0;
   double z_T_m = 0.0;
   double camera_range_m = 0.0;
+  bool has_exposure_camera_geometry = false;
+  double camera_x_T_m = 0.0;
+  double camera_y_T_m = 0.0;
   bool has_inward_yaw = false;
+  bool has_raw_inward_yaw = false;
+  bool has_pnp_inward_pitch_T = false;
   double inward_yaw_rad = 0.0;
+  double pnp_inward_pitch_rad = 0.0;
   double yaw_std_rad = 0.0;
   double reprojection_rms_px = 0.0;
   double confidence = 0.0;

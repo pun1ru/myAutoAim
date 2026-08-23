@@ -60,6 +60,21 @@ std::optional<Measurement> makeTrackerMeasurement(
   measurement.has_exposure_camera_geometry =
       measurement.R_TC.allFinite() &&
       measurement.camera_position_T_m.allFinite();
+  const cv::Matx33d& rotation_camera_from_armor =
+      pose.rotation_camera_from_armor;
+  // PoseResult::rotation_camera_from_armor.col(0) is the armor +x_A axis.
+  // The constrained solver defines +x_A as the inward normal, so do not
+  // negate it when deriving the diagnostic pitch.
+  const cv::Vec3d inward_camera(rotation_camera_from_armor(0, 0),
+                                rotation_camera_from_armor(1, 0),
+                                rotation_camera_from_armor(2, 0));
+  const cv::Vec3d inward_tracker = R_TC * inward_camera;
+  const double inward_norm = cv::norm(inward_tracker);
+  if (finite(inward_tracker) && finite(inward_norm) && inward_norm > 1e-9) {
+    measurement.pnp_inward_pitch_T_rad = std::asin(std::clamp(
+        -inward_tracker[2] / inward_norm, -1.0, 1.0));
+    measurement.has_pnp_inward_pitch_T = true;
+  }
   measurement.confidence = detection.confidence;
   measurement.color_id = detection.color_id;
   measurement.number_id = detection.number_id;
@@ -71,6 +86,10 @@ std::optional<Measurement> makeTrackerMeasurement(
                                            detection.keypoints,
                                            detection.number_id);
   if (reliable_yaw != nullptr) *reliable_yaw = yaw;
+  if (yaw.has_candidate_yaw) {
+    measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;
+    measurement.has_raw_inward_yaw = true;
+  }
   if (yaw.valid) {
     measurement.inward_yaw_T_rad = yaw.inward_yaw_T_rad;
     measurement.yaw_std_rad = yaw.yaw_std_rad;

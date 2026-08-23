@@ -19,7 +19,7 @@ enum class ReliableYawStatus {
 struct ConstrainedYawOptions {
   // sp_vision_25-style constrained reprojection search. The center remains
   // the PnP center; only the candidate armor orientation is changed.
-  double search_half_range_rad = 70.0 * 3.14159265358979323846 / 180.0;
+  double search_half_range_rad = 90.0 * 3.14159265358979323846 / 180.0;
   double search_step_rad = 1.0 * 3.14159265358979323846 / 180.0;
   double armor_pitch_rad = 15.0 * 3.14159265358979323846 / 180.0;
   double outpost_pitch_rad = -15.0 * 3.14159265358979323846 / 180.0;
@@ -38,6 +38,9 @@ struct ConstrainedYawOptions {
 struct ReliableYaw {
   // yaw_std_rad 由重投影误差对 yaw 的有限差分曲率估计，直接进入 EKF R。
   bool valid = false;
+  // A finite optimizer candidate may still fail a later reliability gate.
+  // This is diagnostic only; EKF use still requires valid=true.
+  bool has_candidate_yaw = false;
   ReliableYawStatus status = ReliableYawStatus::InvalidInput;
   double inward_yaw_T_rad = 0.0;
   double reprojection_rms_px = 0.0;

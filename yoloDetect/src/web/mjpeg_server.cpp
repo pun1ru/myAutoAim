@@ -88,7 +88,7 @@ bool sendText(Socket socket, const std::string& response) {
 
 // 构建根路径返回的独立浏览器界面。
 std::string htmlPage() {
-  return R"(<!doctype html>
+  std::string page = R"(<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -108,11 +108,21 @@ std::string htmlPage() {
   .debug-section.pose { height: 260px; }
   .debug-section.predicted { height: 214px; }
   .debug-section.state { height: 154px; }
-  .debug-section.observations { height: 292px; }
+   .debug-section.observations { height: 628px; }
   p, #control-status, #pose-frame { color: #aab7c0; font-size: 14px; }
   .pose-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 42px; padding-top: 12px; }
   .frame-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 14px; color: #aab7c0; font-size: 14px; }
-  .pose-table-wrap { height: calc(100% - 48px); overflow: auto; border-top: 1px solid #39464f; border-bottom: 1px solid #39464f; scrollbar-gutter: stable; }
+   .pose-table-wrap { height: calc(100% - 48px); overflow: auto; border-top: 1px solid #39464f; border-bottom: 1px solid #39464f; scrollbar-gutter: stable; }
+   .observation-table-wrap { height: 244px; overflow: auto; border-top: 1px solid #39464f; border-bottom: 1px solid #39464f; scrollbar-gutter: stable; }
+   .xy-map { height: 310px; margin-top: 12px; border: 1px solid #39464f; background: #111619; }
+   .xy-map svg { display: block; width: 100%; height: 100%; }
+   .xy-map text { font-family: system-ui, sans-serif; font-size: 11px; fill: #aab7c0; }
+   .xy-map .axis { stroke: #596771; stroke-width: 1; }
+   .xy-map .grid { stroke: #2b353c; stroke-width: 1; }
+   .xy-map .predicted { fill: #2f9d76; stroke: #d8f5e8; stroke-width: 1.5; }
+   .xy-map .observed { fill: #15191d; stroke: #f0c75e; stroke-width: 2; }
+   .xy-map .camera { fill: #d4655f; stroke: #ffe0d3; stroke-width: 1.5; }
+   .xy-map .legend { font-size: 11px; fill: #d8e1e6; }
   table { width: max-content; min-width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th, td { height: 36px; padding: 7px 9px; text-align: right; white-space: nowrap; border-bottom: 1px solid #2b353c; font-size: 12px; }
   th, td { min-width: 82px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
@@ -165,12 +175,12 @@ std::string htmlPage() {
       <span id="pose-frame">Frame 0</span>
     </div>
   </div>
-  <div class="pose-table-wrap">
+   <div class="pose-table-wrap">
     <table>
       <thead><tr><th>Target</th><th>Plate</th><th>C X</th><th>C Y</th><th>C Z</th><th>O X</th><th>O Y</th><th>O Z</th><th>Yaw deg</th><th>Pitch deg</th><th>TOF s</th><th>Drop m</th><th>RMS px</th><th>Candidates</th><th>PnP</th><th>Aim</th></tr></thead>
       <tbody id="pose-rows"><tr><td colspan="16">Waiting for detections</td></tr></tbody>
     </table>
-  </div>
+   </div>
 </section>
 <section class="debug-section predicted" aria-labelledby="ekf-title">
   <div class="pose-heading"><h2 id="ekf-title">EKF Predicted Armor Centers (T m)</h2></div>
@@ -192,11 +202,14 @@ std::string htmlPage() {
 </section>
 <section class="debug-section observations" aria-labelledby="ekf-observation-title">
   <div class="pose-heading"><h2 id="ekf-observation-title">EKF Measurements and Association (T)</h2></div>
-  <div class="pose-table-wrap">
+  <div class="observation-table-wrap">
     <table>
-      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>Inward yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
-      <tbody id="ekf-observation-rows"><tr><td colspan="25">No EKF measurements</td></tr></tbody>
+      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>Measured yaw deg</th><th>IPPE pitch deg</th><th>Predicted yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
+      <tbody id="ekf-observation-rows"><tr><td colspan="27">No EKF measurements</td></tr></tbody>
     </table>
+  </div>
+  <div class="xy-map" aria-label="EKF armor and camera XY projection">
+    <svg id="ekf-xy-map" viewBox="0 0 560 310" role="img" aria-label="Armor and camera positions in tracker XY coordinates"></svg>
   </div>
 </section>
 <section class="control-panel" aria-label="Simulator controls">
@@ -217,7 +230,8 @@ std::string htmlPage() {
 <p id="control-status">Controls are sent to the detector command queue.</p>
 </aside>
 </main>
-<script>
+)";
+  page += R"(<script>
 const controlStatus = document.getElementById('control-status');
 const followButton = document.getElementById('follow-button');
 const fireButton = document.getElementById('fire-button');
@@ -344,7 +358,8 @@ for (const [name, label, unit, min, max, step] of projectionDebugFields) {
   projectionDebugControls.append(row);
 }
 
-const poseRows = document.getElementById('pose-rows');
+)";
+  page += R"(const poseRows = document.getElementById('pose-rows');
 const ekfRows = document.getElementById('ekf-rows');
 const ekfStateRows = document.getElementById('ekf-state-rows');
 const ekfObservationRows = document.getElementById('ekf-observation-rows');
@@ -357,6 +372,97 @@ const cell = (text) => {
   return element;
 };
 const metric = (value, digits) => typeof value === 'number' ? value.toFixed(digits) : '-';
+const trackerXyMap = document.getElementById('ekf-xy-map');
+const svgElement = (name, attributes = {}) => {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value);
+  return element;
+};
+const finiteXy = (point) => Number.isFinite(point.x) && Number.isFinite(point.y);
+function renderTrackerXyMap(state) {
+  const predicted = (state.predicted_armors || [])
+    .map((armor) => ({ x: armor.x_T_m, y: armor.y_T_m, slot: armor.armor_slot }))
+    .filter(finiteXy);
+  const observed = (state.tracker_measurements || [])
+    .map((measurement, index) => ({ x: measurement.x_T_m, y: measurement.y_T_m, index }))
+    .filter(finiteXy);
+  const cameraMeasurement = (state.tracker_measurements || []).find(
+    (measurement) => measurement.has_exposure_camera_geometry &&
+      Number.isFinite(measurement.camera_x_T_m) && Number.isFinite(measurement.camera_y_T_m));
+  const camera = cameraMeasurement
+    ? { x: cameraMeasurement.camera_x_T_m, y: cameraMeasurement.camera_y_T_m }
+    : null;
+  const points = [...predicted, ...observed];
+  if (camera) points.push(camera);
+  trackerXyMap.replaceChildren();
+  if (points.length === 0) {
+    const message = svgElement('text', { x: 280, y: 155, 'text-anchor': 'middle' });
+    message.textContent = 'No tracker XY data';
+    trackerXyMap.append(message);
+    return;
+  }
+
+  const left = 60, top = 24, width = 480, height = 236;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const centerX = (Math.min(...xs) + Math.max(...xs)) * 0.5;
+  const centerY = (Math.min(...ys) + Math.max(...ys)) * 0.5;
+  const metersPerPixel = Math.max(
+    (Math.max(...xs) - Math.min(...xs)) / width,
+    (Math.max(...ys) - Math.min(...ys)) / height,
+    0.40 / Math.min(width, height));
+  const halfX = metersPerPixel * width * 0.5 + 0.08;
+  const halfY = metersPerPixel * height * 0.5 + 0.08;
+  const xMin = centerX - halfX, xMax = centerX + halfX;
+  const yMin = centerY - halfY, yMax = centerY + halfY;
+  const mapX = (x) => left + (x - xMin) / (xMax - xMin) * width;
+  const mapY = (y) => top + (yMax - y) / (yMax - yMin) * height;
+
+  trackerXyMap.append(svgElement('rect', { x: left, y: top, width, height, fill: 'none', class: 'axis' }));
+  for (let tick = 0; tick <= 4; ++tick) {
+    const x = left + width * tick / 4;
+    const y = top + height * tick / 4;
+    trackerXyMap.append(svgElement('line', { x1: x, y1: top, x2: x, y2: top + height, class: 'grid' }));
+    trackerXyMap.append(svgElement('line', { x1: left, y1: y, x2: left + width, y2: y, class: 'grid' }));
+    const xLabel = svgElement('text', { x, y: top + height + 18, 'text-anchor': 'middle' });
+    xLabel.textContent = (xMin + (xMax - xMin) * tick / 4).toFixed(2);
+    trackerXyMap.append(xLabel);
+    const yLabel = svgElement('text', { x: left - 8, y: y + 4, 'text-anchor': 'end' });
+    yLabel.textContent = (yMax - (yMax - yMin) * tick / 4).toFixed(2);
+    trackerXyMap.append(yLabel);
+  }
+  const xAxis = svgElement('text', { x: left + width * 0.5, y: 302, 'text-anchor': 'middle' });
+  xAxis.textContent = 'T X (m)';
+  trackerXyMap.append(xAxis);
+  const yAxis = svgElement('text', { x: 14, y: top + height * 0.5, transform: 'rotate(-90 14 ' + (top + height * 0.5) + ')', 'text-anchor': 'middle' });
+  yAxis.textContent = 'T Y (m)';
+  trackerXyMap.append(yAxis);
+
+  for (const armor of predicted) {
+    const x = mapX(armor.x), y = mapY(armor.y);
+    trackerXyMap.append(svgElement('circle', { cx: x, cy: y, r: 6, class: 'predicted' }));
+    const label = svgElement('text', { x: x + 9, y: y - 8, class: 'legend' });
+    label.textContent = 'E' + armor.slot;
+    trackerXyMap.append(label);
+  }
+  for (const measurement of observed) {
+    const x = mapX(measurement.x), y = mapY(measurement.y);
+    trackerXyMap.append(svgElement('path', { d: 'M ' + x + ' ' + (y - 7) + ' L ' + (x + 7) + ' ' + y + ' L ' + x + ' ' + (y + 7) + ' L ' + (x - 7) + ' ' + y + ' Z', class: 'observed' }));
+    const label = svgElement('text', { x: x + 9, y: y + 16, class: 'legend' });
+    label.textContent = 'M' + (measurement.index + 1);
+    trackerXyMap.append(label);
+  }
+  if (camera) {
+    const x = mapX(camera.x), y = mapY(camera.y);
+    trackerXyMap.append(svgElement('path', { d: 'M ' + x + ' ' + (y - 8) + ' L ' + (x + 7) + ' ' + (y + 6) + ' L ' + (x - 7) + ' ' + (y + 6) + ' Z', class: 'camera' }));
+    const label = svgElement('text', { x: x + 9, y: y - 10, class: 'legend' });
+    label.textContent = 'Camera';
+    trackerXyMap.append(label);
+  }
+  const legend = svgElement('text', { x: left + 4, y: top + 15, class: 'legend' });
+  legend.textContent = 'filled: predicted  diamond: measurement  triangle: camera';
+  trackerXyMap.append(legend);
+}
 // 独立于 MJPEG 图像流刷新遥测数据。
 async function refreshPose() {
   if (refreshPose.pending) return;
@@ -365,6 +471,7 @@ async function refreshPose() {
     const response = await fetch('/api/status', { cache: 'no-store' });
     if (!response.ok) return;
     const state = await response.json();
+    renderTrackerXyMap(state);
     poseFrame.textContent = 'Frame ' + state.source_sequence;
     coordinateState.textContent = state.coordinate_valid
       ? 'Odom ready | camera offset error ' + metric(state.camera_position_error_m, 4) + ' m'
@@ -489,7 +596,8 @@ async function refreshPose() {
       stateRows.push(row);
     }
     ekfStateRows.replaceChildren(...stateRows);
-    const observationRows = [];
+)";
+  page += R"(    const observationRows = [];
     for (const [index, observation] of (state.tracker_measurements || []).entries()) {
       const row = document.createElement('tr');
       row.className = observation.has_inward_yaw ? 'valid' : 'warning';
@@ -500,7 +608,11 @@ async function refreshPose() {
       row.append(cell(metric(observation.camera_range_m, 3)));
       row.append(cell(observation.has_inward_yaw ? 'yes' : 'no'));
       row.append(cell(observation.yaw_used ? 'yes' : 'no'));
-      row.append(cell(observation.has_inward_yaw ? metric(observation.inward_yaw_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(observation.has_raw_inward_yaw
+        ? metric(observation.inward_yaw_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(observation.has_pnp_inward_pitch_T
+        ? metric(observation.pnp_inward_pitch_rad * 180 / Math.PI, 2) : '-'));
+      row.append(cell(observation.association_valid ? metric(observation.predicted_yaw_rad * 180 / Math.PI, 2) : '-'));
       row.append(cell(observation.has_inward_yaw ? metric(observation.yaw_std_rad * 180 / Math.PI, 2) : '-'));
       row.append(cell(metric(observation.reprojection_rms_px, 2)));
       row.append(cell(metric(observation.confidence, 3)));
@@ -524,7 +636,7 @@ async function refreshPose() {
     if (observationRows.length === 0) {
       const row = document.createElement('tr');
       const empty = cell('No EKF measurements');
-      empty.colSpan = 25;
+      empty.colSpan = 27;
       row.append(empty);
       observationRows.push(row);
     }
@@ -536,11 +648,12 @@ async function refreshPose() {
 }
 refreshPose.pending = false;
 refreshPose();
-setInterval(refreshPose, 500);
+setInterval(refreshPose, 100);
 </script>
 </body>
 </html>
 )";
+  return page;
 }
 
 }  // namespace
@@ -814,9 +927,19 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << ",\"y_T_m\":" << measurement.y_T_m
            << ",\"z_T_m\":" << measurement.z_T_m
            << ",\"camera_range_m\":" << measurement.camera_range_m
+           << ",\"has_exposure_camera_geometry\":"
+           << (measurement.has_exposure_camera_geometry ? "true" : "false")
+           << ",\"camera_x_T_m\":" << measurement.camera_x_T_m
+           << ",\"camera_y_T_m\":" << measurement.camera_y_T_m
            << ",\"has_inward_yaw\":"
            << (measurement.has_inward_yaw ? "true" : "false")
+           << ",\"has_raw_inward_yaw\":"
+           << (measurement.has_raw_inward_yaw ? "true" : "false")
+           << ",\"has_pnp_inward_pitch_T\":"
+           << (measurement.has_pnp_inward_pitch_T ? "true" : "false")
            << ",\"inward_yaw_rad\":" << measurement.inward_yaw_rad
+           << ",\"pnp_inward_pitch_rad\":"
+           << measurement.pnp_inward_pitch_rad
            << ",\"yaw_std_rad\":" << measurement.yaw_std_rad
            << ",\"reprojection_rms_px\":"
            << measurement.reprojection_rms_px
