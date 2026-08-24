@@ -240,6 +240,7 @@ std::string htmlPage() {
   <div class="control-row"><span class="control-label">Linear speed</span><button data-action="speed-down">Speed -</button><button data-action="speed-up">Speed +</button><span id="linear-speed-state" class="control-label">0.00 m/s</span></div>
   <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
   <div class="control-row"><span class="control-label">Dynamic fire control</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Enable Dynamic Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Start Continuous Fire</button><span id="gimbal-state" class="control-label">Dynamic follow idle</span></div>
+  <div class="control-row"><label class="control-label" for="dynamic-delay">Prediction delay</label><input id="dynamic-delay" class="spin-input" type="number" min="0" max="0.5" step="0.001" inputmode="decimal" aria-label="Dynamic target prediction delay in seconds"><span class="ekf-unit">s</span><button id="dynamic-delay-apply" type="button">Apply</button></div>
 </section>
 <section class="control-panel tuning-panel" aria-label="EKF tuning controls">
   <div class="pose-heading tuning-heading"><h2>EKF Tuning</h2><span class="frame-meta">Live Q/R and gates; initial uncertainties apply after reset</span><button data-action="ekf-reset" type="button">Reset EKF Track</button></div>
@@ -263,6 +264,8 @@ const linearSpeedState = document.getElementById('linear-speed-state');
 const spinSpeedInput = document.getElementById('spin-speed');
 const spinSpeedState = document.getElementById('spin-speed-state');
 const spinSpeedApply = document.getElementById('spin-speed-apply');
+const dynamicDelayInput = document.getElementById('dynamic-delay');
+const dynamicDelayApply = document.getElementById('dynamic-delay-apply');
 const ekfTuningControls = document.getElementById('ekf-tuning-controls');
 const ekfQMatrix = document.getElementById('ekf-q-matrix');
 const ekfRMatrix = document.getElementById('ekf-r-matrix');
@@ -274,6 +277,8 @@ const projectionDraftValues = new Map();
 const projectionPendingValues = new Map();
 let spinSpeedDraft = null;
 let spinSpeedPending = null;
+let dynamicDelayDraft = null;
+let dynamicDelayPending = null;
 async function sendControl(action, button) {
   if (button) button.disabled = true;
   controlStatus.textContent = 'Sending ' + action + '...';
@@ -306,6 +311,23 @@ spinSpeedApply.addEventListener('click', async () => {
   spinSpeedPending = speed;
   if (!await sendControl('spin-speed:' + speed, spinSpeedApply)) {
     spinSpeedPending = null;
+  }
+});
+dynamicDelayInput.addEventListener('input', () => {
+  dynamicDelayDraft = dynamicDelayInput.value;
+  dynamicDelayPending = null;
+});
+dynamicDelayApply.addEventListener('click', async () => {
+  const delay = Number(dynamicDelayInput.value);
+  if (!Number.isFinite(delay) || delay < 0 || delay > 0.5) {
+    controlStatus.textContent = 'Prediction delay must be between 0 and 0.5 s.';
+    return;
+  }
+  dynamicDelayDraft = dynamicDelayInput.value;
+  dynamicDelayPending = delay;
+  if (!await sendControl('dynamic-param:prediction_delay_s:' + delay,
+                         dynamicDelayApply)) {
+    dynamicDelayPending = null;
   }
 });
 
@@ -745,6 +767,19 @@ async function refreshPose() {
     if (spinSpeedDraft === null && document.activeElement !== spinSpeedInput) {
       spinSpeedInput.value = metric(state.spin_speed_deg_s, 1);
     }
+    if (dynamicDelayDraft !== null) {
+      if (dynamicDelayPending !== null && parameterValuesMatch(
+          state.dynamic_prediction_delay_s, dynamicDelayPending)) {
+        dynamicDelayDraft = null;
+        dynamicDelayPending = null;
+      } else {
+        dynamicDelayInput.value = dynamicDelayDraft;
+      }
+    }
+    if (dynamicDelayDraft === null &&
+        document.activeElement !== dynamicDelayInput) {
+      dynamicDelayInput.value = metric(state.dynamic_prediction_delay_s, 3);
+    }
     const tuning = state.ekf_tuning || {};
     refreshParameterInputs(ekfTuningControls, tuning, ekfDraftValues,
       ekfPendingValues, 'input[data-ekf-name]', 'ekfName');
@@ -1133,6 +1168,8 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
   }
   stream << ",\"gimbal_following\":"
          << (telemetry.gimbal_following ? "true" : "false")
+         << ",\"dynamic_prediction_delay_s\":"
+         << telemetry.dynamic_prediction_delay_s
          << ",\"fire_pending\":"
          << (telemetry.fire_pending ? "true" : "false")
          << ",\"gimbal_status\":\"" << jsonEscape(telemetry.gimbal_status)

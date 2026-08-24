@@ -37,6 +37,7 @@ void validateOptions(const GimbalAimOptions& options) {
   if (!finite(options.minimum_pitch_command_deg) ||
       !finite(options.maximum_pitch_command_deg) ||
       !finite(options.target_height_offset_m) ||
+      !finite(options.dynamic_prediction_delay_s) ||
       !finite(options.flight_time_convergence_tolerance_s) ||
       !finite(options.muzzle_direction_tolerance_rad)) {
     throw std::invalid_argument("gimbal aim options must be finite");
@@ -45,6 +46,9 @@ void validateOptions(const GimbalAimOptions& options) {
       options.maximum_pitch_command_deg) {
     throw std::invalid_argument(
         "minimum pitch command must be less than maximum pitch command");
+  }
+  if (options.dynamic_prediction_delay_s < 0.0) {
+    throw std::invalid_argument("dynamic prediction delay must be non-negative");
   }
   if (options.maximum_iterations == 0) {
     throw std::invalid_argument("maximum iterations must be positive");

@@ -788,10 +788,14 @@ void drawProjectionDebugCenters(
 std::optional<yolo_detect::control::AimTarget> makeDynamicAimTarget(
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::coordinates::CoordinateSnapshot& snapshot,
-    const yolo_detect::control::GimbalAimSolver& aim_solver) {
-  if (!tracker_output.has_state || !snapshot.valid) return std::nullopt;
+    const yolo_detect::control::GimbalAimSolver& aim_solver,
+    double prediction_delay_s) {
+  if (!tracker_output.has_state || !snapshot.valid ||
+      !std::isfinite(prediction_delay_s) || prediction_delay_s < 0.0) {
+    return std::nullopt;
+  }
 
-  double horizon_s = 0.0;
+  double horizon_s = prediction_delay_s;
   std::optional<yolo_detect::control::AimTarget> selected;
   for (int iteration = 0; iteration < 10; ++iteration) {
     double best_facing = -std::numeric_limits<double>::infinity();
@@ -829,10 +833,12 @@ std::optional<yolo_detect::control::AimTarget> makeDynamicAimTarget(
     if (!trial.valid || !std::isfinite(trial.time_of_flight_s)) {
       return std::nullopt;
     }
-    if (std::abs(trial.time_of_flight_s - horizon_s) < 1e-3) {
+    const double next_horizon_s =
+        prediction_delay_s + trial.time_of_flight_s;
+    if (std::abs(next_horizon_s - horizon_s) < 1e-3) {
       return selected;
     }
-    horizon_s = trial.time_of_flight_s;
+    horizon_s = next_horizon_s;
   }
   return selected;
 }
@@ -845,6 +851,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
     const std::string& coordinate_message,
     const yolo_detect::control::DynamicTargetController& gimbal_control,
+    double dynamic_prediction_delay_s,
     const SceneState& scene_state,
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::tracking::WholeVehicleEkfOptions& ekf_options,
@@ -1015,6 +1022,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   telemetry.actual_pitch_command_deg =
       90.0 + coordinate_snapshot.gimbal_elevation_rad * 180.0 / CV_PI;
   telemetry.gimbal_following = gimbal_control.following();
+  telemetry.dynamic_prediction_delay_s = dynamic_prediction_delay_s;
   telemetry.fire_pending = gimbal_control.firePending();
   telemetry.gimbal_status = gimbal_control.status();
   telemetry.last_gimbal_command_id = gimbal_control.lastCommandId();
@@ -1123,6 +1131,8 @@ int main(int argc, char** argv) {
   yolo_detect::tracking::ConstrainedYawSolver constrained_yaw_solver(
       camera_calibration);
   const yolo_detect::control::GimbalAimSolver aim_solver;
+  double dynamic_prediction_delay_s =
+      aim_solver.options().dynamic_prediction_delay_s;
   yolo_detect::tracking::WholeVehicleEkf whole_vehicle_tracker;
   ProjectionDebugState projection_debug;
   yolo_detect::coordinates::SimulatorPoseAdapter simulator_pose;
@@ -1410,6 +1420,26 @@ int main(int argc, char** argv) {
       return false;
     }
   };
+  const auto applyDynamicTuning = [&](std::string_view action) {
+    constexpr std::string_view prefix = "dynamic-param:";
+    if (!hasPrefix(action, prefix)) return false;
+    const std::string payload(action.substr(prefix.size()));
+    const std::size_t separator = payload.find(':');
+    if (separator == std::string::npos || separator == 0 ||
+        separator + 1 >= payload.size()) {
+      return false;
+    }
+    if (payload.substr(0, separator) != "prediction_delay_s") return false;
+    try {
+      const double value = std::stod(payload.substr(separator + 1));
+      if (!std::isfinite(value) || value < 0.0 || value > 0.5) return false;
+      dynamic_prediction_delay_s = value;
+      control_message = "Dynamic prediction delay updated";
+      return true;
+    } catch (const std::exception&) {
+      return false;
+    }
+  };
   const auto queueWebCommand = [&](std::string_view action) {
     constexpr std::array<std::string_view, 14> kKnownActions = {
         "scene-shooting-range", "scene-energy", "reset", "motion-stop",
@@ -1421,9 +1451,11 @@ int main(int argc, char** argv) {
     const bool is_ekf_param = hasPrefix(action, "ekf-param:");
     const bool is_projection_debug_param =
         hasPrefix(action, "projection-debug-param:");
+    const bool is_dynamic_param = hasPrefix(action, "dynamic-param:");
     if (std::find(kKnownActions.begin(), kKnownActions.end(), action) ==
             kKnownActions.end() &&
-        !is_spin_speed && !is_ekf_param && !is_projection_debug_param) {
+        !is_spin_speed && !is_ekf_param && !is_projection_debug_param &&
+        !is_dynamic_param) {
       return false;
     }
     std::lock_guard<std::mutex> lock(web_command_mutex);
@@ -1442,6 +1474,13 @@ int main(int argc, char** argv) {
         if (!applyEkfTuning(action)) {
           control_ok = false;
           control_message = "invalid EKF parameter command";
+        } else {
+          control_ok = true;
+        }
+      } else if (hasPrefix(action, "dynamic-param:")) {
+        if (!applyDynamicTuning(action)) {
+          control_ok = false;
+          control_message = "invalid dynamic fire parameter command";
         } else {
           control_ok = true;
         }
@@ -1808,7 +1847,8 @@ int main(int argc, char** argv) {
             [](const DetectionAim& item) { return item.aim.valid; }));
 
     const std::optional<yolo_detect::control::AimTarget> dynamic_target =
-        makeDynamicAimTarget(tracker_output, coordinate_snapshot, aim_solver);
+        makeDynamicAimTarget(tracker_output, coordinate_snapshot, aim_solver,
+                             dynamic_prediction_delay_s);
     const yolo_detect::control::DynamicTargetCommand gimbal_command =
         gimbal_control.update(dynamic_target, coordinate_snapshot);
     if (gimbal_command.valid) {
@@ -1922,7 +1962,8 @@ int main(int argc, char** argv) {
             annotated,
             makeWebTelemetry(header.source_sequence, poses, detection_aims,
                              coordinate_snapshot, coordinate_message,
-                             gimbal_control, scene_state, tracker_output,
+                             gimbal_control, dynamic_prediction_delay_s,
+                             scene_state, tracker_output,
                              whole_vehicle_tracker.options(),
                              constrained_yaw_solver.options(),
                              projection_debug,

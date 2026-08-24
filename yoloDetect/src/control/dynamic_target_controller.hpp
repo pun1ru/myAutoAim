@@ -10,7 +10,7 @@
 namespace yolo_detect::control {
 
 struct DynamicTargetControllerOptions {
-  double alignment_tolerance_deg = 0.5;
+  double alignment_tolerance_deg = 2.0;
   std::chrono::milliseconds fire_timeout{3000};
 };
 

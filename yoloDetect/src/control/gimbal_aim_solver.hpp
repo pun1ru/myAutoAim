@@ -31,6 +31,9 @@ struct GimbalAimOptions {
   // Physical target-height correction applied before ballistic solving. A
   // negative value aims below the reconstructed armor center.
   double target_height_offset_m = -0.05;
+  // Fixed exposure-to-command delay included before ballistic flight time
+  // when predicting a dynamic EKF target.
+  double dynamic_prediction_delay_s = 0.020;
   // Match sp_vision_25: at most ten flight-time fixed-point iterations,
   // converging when adjacent time-of-flight estimates differ by under 1 ms.
   std::size_t maximum_iterations = 10;
