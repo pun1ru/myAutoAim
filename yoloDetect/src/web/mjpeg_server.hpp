@@ -194,7 +194,7 @@ struct WebFrameTelemetry {
   double actual_yaw_deg = 0.0;
   double actual_pitch_command_deg = 90.0;
   bool gimbal_following = false;
-  double dynamic_prediction_delay_s = 0.020;
+  double dynamic_prediction_delay_s = 0.060;
   bool fire_pending = false;
   bool static_target_valid = false;
   std::string gimbal_status;
