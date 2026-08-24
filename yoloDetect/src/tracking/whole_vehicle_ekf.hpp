@@ -158,11 +158,11 @@ struct WholeVehicleEkfOptions {
   double maximum_radius_m = 0.50;
   double maximum_radius_difference_m = 0.12;
   double maximum_height_difference_m = 0.20;
-  // 连续白噪声谱密度，分别用于平动、角运动和几何随机游走。
-  // Vehicle-center acceleration spectral density. Armor rotation happens much
-  // faster than a chassis can reverse its translational acceleration.
-  double q_linear_acceleration = 0.15;
-  double q_angular_acceleration = 2.0;
+  // Match sp_vision_25's discrete piecewise-white-acceleration model:
+  // v * [[dt^4/4, dt^3/2], [dt^3/2, dt^2]]. Units are m^2/s^4 and
+  // rad^2/s^4 respectively, not continuous-time spectral densities.
+  double q_linear_acceleration = 100.0;
+  double q_angular_acceleration = 400.0;
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
   double q_geometry = 0.0;
@@ -172,7 +172,7 @@ struct WholeVehicleEkfOptions {
   double position_std_z_m = 0.10;
   // Rtheta = base + log(1 + facing_angle) * scale, following the
   // sp_vision_25 yaw-noise form. Values are variances in rad^2.
-  double yaw_facing_base_variance_rad2 = 9e-2;
+  double yaw_facing_base_variance_rad2 = 1.0;
   double yaw_facing_log_variance_scale_rad2 = 1.0 / 200.0;
   // A single plate observes center only through the configured radius and is
   // therefore much weaker than a simultaneous multi-plate observation.
@@ -209,11 +209,13 @@ struct WholeVehicleEkfOptions {
   int lost_frame_limit = 300;
   double lost_time_limit_s = 1.5;
   double maximum_frame_dt_s = 0.25;
-  double initial_position_std_m = 0.25;
-  double initial_velocity_std_mps = 0.5;
-  double initial_theta_std_rad = 0.35;
-  double initial_omega_std_rad_s = 8.0;
-  double initial_geometry_std_m = 0.15;
+  // sqrt([1,64,1,64,1,64,0.4,100,1,1,1]), matching sp_vision_25's
+  // ordinary four-armor P0 diagonal.
+  double initial_position_std_m = 1.0;
+  double initial_velocity_std_mps = 8.0;
+  double initial_theta_std_rad = 0.6324555320336759;
+  double initial_omega_std_rad_s = 10.0;
+  double initial_geometry_std_m = 1.0;
   double maximum_angular_speed_rad_s = 6.0;
   double maximum_omega_correction_rad_s = 0.15;
   double maximum_multi_armor_position_residual_m = 0.18;

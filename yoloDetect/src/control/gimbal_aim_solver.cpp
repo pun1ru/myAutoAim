@@ -36,6 +36,7 @@ double wrapDegrees(double angle) noexcept {
 void validateOptions(const GimbalAimOptions& options) {
   if (!finite(options.minimum_pitch_command_deg) ||
       !finite(options.maximum_pitch_command_deg) ||
+      !finite(options.target_height_offset_m) ||
       !finite(options.flight_time_convergence_tolerance_s) ||
       !finite(options.muzzle_direction_tolerance_rad)) {
     throw std::invalid_argument("gimbal aim options must be finite");
@@ -95,7 +96,6 @@ GimbalAimResult GimbalAimSolver::solve(
   GimbalAimResult result;
   result.predicted = target.predicted;
   result.prediction_horizon_s = target.prediction_horizon_s;
-  result.target_center_odom_m = target.center_odom_m;
   if (!snapshot.valid) {
     result.status = AimStatus::InvalidCoordinateSnapshot;
     return result;
@@ -106,6 +106,10 @@ GimbalAimResult GimbalAimSolver::solve(
     result.status = AimStatus::NonFiniteTarget;
     return result;
   }
+  const cv::Vec3d ballistic_target_odom_m(
+      target.center_odom_m[0], target.center_odom_m[1],
+      target.center_odom_m[2] + options_.target_height_offset_m);
+  result.target_center_odom_m = ballistic_target_odom_m;
 
   const double muzzle_direction_tolerance_rad =
       options_.muzzle_direction_tolerance_rad > 0.0
@@ -120,7 +124,7 @@ GimbalAimResult GimbalAimSolver::solve(
        iteration <= options_.maximum_iterations; ++iteration) {
     const cv::Vec3d muzzle = coordinates::muzzlePositionOdom(
         snapshot, yaw_rad, elevation_rad);
-    const cv::Vec3d relative = target.center_odom_m - muzzle;
+    const cv::Vec3d relative = ballistic_target_odom_m - muzzle;
     const double horizontal = std::hypot(relative[0], relative[1]);
     const double vertical = relative[2];
     ballistic = ballistic_solver_.solve(

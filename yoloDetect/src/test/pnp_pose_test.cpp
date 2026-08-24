@@ -73,8 +73,8 @@ void testObjectPointDefinitions() {
          "small armor width must be 0.135 m");
   expect(std::abs(large[0].y - 0.1125) < 1e-12,
          "large armor width must be 0.225 m");
-  expect(std::abs(small[0].z + 0.0275) < 1e-12,
-         "armor height must be 0.055 m");
+  expect(std::abs(small[0].z + 0.028) < 1e-12,
+         "armor height must be 0.056 m");
   expect(small[0].y == small[1].y && small[2].y == small[3].y,
          "object point order must begin with BL, TL");
   expect(small[1].z == small[2].z && small[3].z == small[0].z,

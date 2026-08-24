@@ -28,6 +28,9 @@ struct AimTarget {
 struct GimbalAimOptions {
   double minimum_pitch_command_deg = 45.0;
   double maximum_pitch_command_deg = 135.0;
+  // Physical target-height correction applied before ballistic solving. A
+  // negative value aims below the reconstructed armor center.
+  double target_height_offset_m = -0.05;
   // Match sp_vision_25: at most ten flight-time fixed-point iterations,
   // converging when adjacent time-of-flight estimates differ by under 1 ms.
   std::size_t maximum_iterations = 10;
@@ -45,6 +48,7 @@ struct GimbalAimResult {
       ballistics::BallisticStatus::NumericalFailure;
   bool predicted = false;
   double prediction_horizon_s = 0.0;
+  // The height-offset-adjusted point used by the ballistic solution.
   cv::Vec3d target_center_odom_m{0.0, 0.0, 0.0};
   cv::Vec3d muzzle_center_odom_m{0.0, 0.0, 0.0};
   double yaw_command_deg = std::numeric_limits<double>::quiet_NaN();

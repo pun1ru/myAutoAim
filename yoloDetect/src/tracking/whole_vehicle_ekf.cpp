@@ -248,13 +248,15 @@ const State& WholeVehicleEkf::state() const noexcept { return state_; }
 
 Matrix11 WholeVehicleEkf::processNoise(double dt_s) const {
   Matrix11 noise = Matrix11::Zero();
-  // 连续白噪声加速度离散化：q * [[dt^3/3, dt^2/2], [dt^2/2, dt]]。
+  // Same discrete piecewise-white acceleration form as sp_vision_25.
   const auto addConstantVelocityNoise = [&](int position, int velocity,
-                                            double spectral_density) {
-    noise(position, position) = spectral_density * dt_s * dt_s * dt_s / 3.0;
-    noise(position, velocity) = spectral_density * dt_s * dt_s / 2.0;
+                                            double acceleration_variance) {
+    noise(position, position) =
+        acceleration_variance * dt_s * dt_s * dt_s * dt_s / 4.0;
+    noise(position, velocity) =
+        acceleration_variance * dt_s * dt_s * dt_s / 2.0;
     noise(velocity, position) = noise(position, velocity);
-    noise(velocity, velocity) = spectral_density * dt_s;
+    noise(velocity, velocity) = acceleration_variance * dt_s * dt_s;
   };
   addConstantVelocityNoise(CenterX, VelocityX, options_.q_linear_acceleration);
   addConstantVelocityNoise(CenterY, VelocityY, options_.q_linear_acceleration);
@@ -787,13 +789,11 @@ bool WholeVehicleEkf::applyJointUpdate(
                       gain * covariance * gain.transpose();
   state_.covariance =
       0.5 * (state_.covariance + state_.covariance.transpose());
-  // Keep odd radius and height deltas disabled while validating projection.
+  // Keep odd radius and height deltas fixed while validating projection.
+  // Their initialized P0 uncertainty remains available for diagnostics and
+  // future geometry updates, matching the reference P0 diagonal.
   state_.x[RadiusOddDelta] = 0.0;
   state_.x[HeightOddDelta] = 0.0;
-  state_.covariance.row(RadiusOddDelta).setZero();
-  state_.covariance.col(RadiusOddDelta).setZero();
-  state_.covariance.row(HeightOddDelta).setZero();
-  state_.covariance.col(HeightOddDelta).setZero();
   if (!stateFiniteAndPhysical()) {
     state_ = prior;
     return false;
@@ -826,10 +826,6 @@ bool WholeVehicleEkf::initialize(const Measurement& measurement) {
   state_.covariance(HeightOddDelta, HeightOddDelta) = square(options_.initial_geometry_std_m);
   state_.x[RadiusOddDelta] = 0.0;
   state_.x[HeightOddDelta] = 0.0;
-  state_.covariance.row(RadiusOddDelta).setZero();
-  state_.covariance.col(RadiusOddDelta).setZero();
-  state_.covariance.row(HeightOddDelta).setZero();
-  state_.covariance.col(HeightOddDelta).setZero();
   if (!stateFiniteAndPhysical()) return false;
   has_state_ = true;
   tracking_state_ = TrackingState::Confirming;

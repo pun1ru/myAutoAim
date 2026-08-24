@@ -239,7 +239,7 @@ std::string htmlPage() {
   <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
   <div class="control-row"><span class="control-label">Linear speed</span><button data-action="speed-down">Speed -</button><button data-action="speed-up">Speed +</button><span id="linear-speed-state" class="control-label">0.00 m/s</span></div>
   <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
-  <div class="control-row"><span class="control-label">Dynamic fire control</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Enable Dynamic Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Dynamic Fire Once</button><span id="gimbal-state" class="control-label">Dynamic follow idle</span></div>
+  <div class="control-row"><span class="control-label">Dynamic fire control</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Enable Dynamic Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Start Continuous Fire</button><span id="gimbal-state" class="control-label">Dynamic follow idle</span></div>
 </section>
 <section class="control-panel tuning-panel" aria-label="EKF tuning controls">
   <div class="pose-heading tuning-heading"><h2>EKF Tuning</h2><span class="frame-meta">Live Q/R and gates; initial uncertainties apply after reset</span><button data-action="ekf-reset" type="button">Reset EKF Track</button></div>
@@ -272,6 +272,8 @@ const ekfDraftValues = new Map();
 const ekfPendingValues = new Map();
 const projectionDraftValues = new Map();
 const projectionPendingValues = new Map();
+let spinSpeedDraft = null;
+let spinSpeedPending = null;
 async function sendControl(action, button) {
   if (button) button.disabled = true;
   controlStatus.textContent = 'Sending ' + action + '...';
@@ -290,13 +292,21 @@ async function sendControl(action, button) {
 for (const button of document.querySelectorAll('[data-action]')) {
   button.addEventListener('click', () => sendControl(button.dataset.action, button));
 }
-spinSpeedApply.addEventListener('click', () => {
+spinSpeedInput.addEventListener('input', () => {
+  spinSpeedDraft = spinSpeedInput.value;
+  spinSpeedPending = null;
+});
+spinSpeedApply.addEventListener('click', async () => {
   const speed = Number(spinSpeedInput.value);
   if (!Number.isFinite(speed) || speed < 0 || speed > 720) {
     controlStatus.textContent = 'Spin speed must be between 0 and 720 deg/s.';
     return;
   }
-  sendControl('spin-speed:' + speed, spinSpeedApply);
+  spinSpeedDraft = spinSpeedInput.value;
+  spinSpeedPending = speed;
+  if (!await sendControl('spin-speed:' + speed, spinSpeedApply)) {
+    spinSpeedPending = null;
+  }
 });
 
 const ekfTuningFields = [
@@ -305,8 +315,8 @@ const ekfTuningFields = [
   ['Initial uncertainty', 'initial_theta_std_rad', 'Initial theta std', 'rad', 0.001, 3.2, 0.01],
   ['Initial uncertainty', 'initial_omega_std_rad_s', 'Initial omega std', 'rad/s', 0.001, 30, 0.01],
   ['Initial uncertainty', 'initial_geometry_std_m', 'Initial geometry std', 'm', 0.001, 1, 0.01],
-  ['Process noise Q', 'q_linear_acceleration', 'Unmodeled chassis acceleration', 'm^2/s^3', 0, 100, 0.001],
-  ['Process noise Q', 'q_angular_acceleration', 'Unmodeled spin acceleration', 'rad^2/s^3', 0, 100, 0.001],
+  ['Process noise Q', 'q_linear_acceleration', 'Linear acceleration variance', 'm^2/s^4', 0, 1000, 0.1],
+  ['Process noise Q', 'q_angular_acceleration', 'Angular acceleration variance', 'rad^2/s^4', 0, 1000, 0.1],
   ['Process noise Q', 'q_geometry', 'Armor-radius drift', 'm^2/s', 0, 10, 0.001],
   ['Measurement noise R', 'position_std_x_m', 'PnP camera X one-sigma (Rx)', 'm', 0.001, 1, 0.001],
   ['Measurement noise R', 'position_std_y_m', 'PnP camera Y one-sigma (Ry)', 'm', 0.001, 1, 0.001],
@@ -446,10 +456,10 @@ function renderEkfMatrices(tuning) {
   const ry = number('position_std_y_m');
   const rz = number('position_std_z_m');
   const rtheta = number('yaw_facing_base_variance_rad2');
-  ekfQMatrix.textContent = 'Q: allowed model error\nQ(dt) = q * [[dt^3/3, dt^2/2], [dt^2/2, dt]]\n\n1.0 s equivalent one-sigma:\nchassis position: ' +
-    fixed(std(qLinear / 3)) + ' m\nchassis velocity: ' +
+  ekfQMatrix.textContent = 'Q: sp_vision discrete acceleration variance\nQ(dt) = v * [[dt^4/4, dt^3/2], [dt^3/2, dt^2]]\n\n1.0 s equivalent one-sigma:\nchassis position: ' +
+    fixed(std(qLinear) * 0.5) + ' m\nchassis velocity: ' +
     fixed(std(qLinear)) + ' m/s\nE0 yaw: ' +
-    fixed(degrees(std(qYaw / 3)), 2) + ' deg\nspin speed: ' +
+    fixed(degrees(std(qYaw) * 0.5), 2) + ' deg\nspin speed: ' +
     fixed(degrees(std(qYaw)), 2) + ' deg/s';
   ekfRMatrix.textContent = 'R: nominal one-frame PnP error\nR = diag(Rx, Ry, Rz, Rtheta)\n\nRx: sigma=' +
     fixed(rx) + ' m, variance=' + fixed(rx * rx, 6) + ' m^2\nRy: sigma=' +
@@ -712,7 +722,9 @@ async function refreshPose() {
       state.gimbal_following ? 'Disable Dynamic Follow' : 'Enable Dynamic Follow';
     followButton.classList.toggle('active', state.gimbal_following);
     followButton.setAttribute('aria-pressed', String(state.gimbal_following));
-    fireButton.disabled = state.fire_pending;
+    fireButton.disabled = false;
+    fireButton.textContent = state.fire_pending
+      ? 'Stop Continuous Fire' : 'Start Continuous Fire';
     const dynamicTarget = state.static_target_valid
       ? ' | predicted armor O=(' + metric(state.static_target_odom_x_m, 3) + ', ' +
         metric(state.static_target_odom_y_m, 3) + ', ' +
@@ -721,7 +733,16 @@ async function refreshPose() {
     gimbalState.textContent = state.gimbal_status + dynamicTarget;
     linearSpeedState.textContent = metric(state.vehicle_speed_mps, 2) + ' m/s';
     spinSpeedState.textContent = metric(state.spin_speed_deg_s, 1) + ' deg/s';
-    if (document.activeElement !== spinSpeedInput) {
+    if (spinSpeedDraft !== null) {
+      if (spinSpeedPending !== null &&
+          parameterValuesMatch(state.spin_speed_deg_s, spinSpeedPending)) {
+        spinSpeedDraft = null;
+        spinSpeedPending = null;
+      } else {
+        spinSpeedInput.value = spinSpeedDraft;
+      }
+    }
+    if (spinSpeedDraft === null && document.activeElement !== spinSpeedInput) {
       spinSpeedInput.value = metric(state.spin_speed_deg_s, 1);
     }
     const tuning = state.ekf_tuning || {};

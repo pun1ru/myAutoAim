@@ -99,6 +99,11 @@ struct Options {
   bool no_display = false;
   std::filesystem::path record_path;
   double record_fps = 60.0;
+  double record_duration_s = 0.0;
+  double record_delay_s = 0.0;
+  bool passive_recording = false;
+  bool startup_dynamic_follow = false;
+  bool startup_continuous_fire = false;
   std::string startup_scene = "unchanged";
   std::string scene_after = "unchanged";
   double scene_switch_after = 0.0;
@@ -236,8 +241,13 @@ void printUsage() {
       << "  --speed <m/s>        Initial vehicle speed (default: 1.5)\n"
       << "  --speed-step <m/s>   +/- adjustment step (default: 0.25)\n"
       << "  --no-display         Disable drawing and the visualization window\n"
-      << "  --record <path>      Write annotated video; works with --no-display\n"
+      << "  --record <path>      Write original camera video; works with --no-display\n"
       << "  --record-fps <fps>   Recorded video playback FPS (default: 60)\n"
+      << "  --record-duration <s> Stop recording after this camera-time duration\n"
+      << "  --record-delay <s>    Wait before beginning original-frame recording\n"
+      << "  --record-passive     Record without scene, gimbal, or fire control\n"
+      << "  --dynamic-follow     Enable dynamic EKF follow at startup\n"
+      << "  --continuous-fire    Enable continuous fire at startup\n"
       << "  --scene <name>       Startup scene: unchanged, armor, energy, outpost, shooting-range\n"
       << "  --scene-after <name> Switch to this scene after --scene-switch-after seconds\n"
       << "  --scene-switch-after <s> Timed scene switch (default: disabled)\n"
@@ -398,6 +408,22 @@ Options parseOptions(int argc, char** argv) {
       if (options.record_fps <= 0.0 || options.record_fps > 240.0) {
         throw std::runtime_error("record-fps must be in (0, 240]");
       }
+    } else if (argument == "--record-duration") {
+      options.record_duration_s = std::stod(requireValue(index, argc, argv));
+      if (options.record_duration_s <= 0.0 || options.record_duration_s > 3600.0) {
+        throw std::runtime_error("record-duration must be in (0, 3600]");
+      }
+    } else if (argument == "--record-delay") {
+      options.record_delay_s = std::stod(requireValue(index, argc, argv));
+      if (options.record_delay_s < 0.0 || options.record_delay_s > 3600.0) {
+        throw std::runtime_error("record-delay must be in [0, 3600]");
+      }
+    } else if (argument == "--record-passive") {
+      options.passive_recording = true;
+    } else if (argument == "--dynamic-follow") {
+      options.startup_dynamic_follow = true;
+    } else if (argument == "--continuous-fire") {
+      options.startup_continuous_fire = true;
     } else if (argument == "--scene") {
       options.startup_scene = requireValue(index, argc, argv);
       if (options.startup_scene != "unchanged" &&
@@ -473,6 +499,12 @@ Options parseOptions(int argc, char** argv) {
         modelProfileDefinition(*options.model_profile);
     options.model = modelProfilePath(argv[0], *options.model_profile);
     if (!options.input_size_explicit) options.input_size = profile.input_size;
+  }
+  if (options.passive_recording && options.record_path.empty()) {
+    throw std::runtime_error("record-passive requires --record");
+  }
+  if (options.startup_continuous_fire && !options.startup_dynamic_follow) {
+    throw std::runtime_error("continuous-fire requires --dynamic-follow");
   }
   return options;
 }
@@ -699,8 +731,8 @@ void drawPredictedArmorCenters(
         armor.position_T_m, image.size(), exposure_snapshot, calibration);
     if (!projected) continue;
     const cv::Point center = *projected;
-    cv::circle(image, center, 7, cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA);
-    cv::circle(image, center, 5, cv::Scalar(0, 255, 255), cv::FILLED,
+    cv::circle(image, center, 5, cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA);
+    cv::circle(image, center, 3, cv::Scalar(0, 255, 255), cv::FILLED,
                cv::LINE_AA);
     cv::putText(image, "E" + std::to_string(armor.armor_slot),
                 center + cv::Point(7, -7), cv::FONT_HERSHEY_SIMPLEX, 0.5,
@@ -1119,15 +1151,21 @@ int main(int argc, char** argv) {
   scene_state.direction_deg = options.direction_deg;
   scene_state.spin_speed_deg_s = options.spin_speed_deg_s;
 
-  daedalus_sdk::SceneControlOptions scene_options;
-  scene_options.endpoint = {options.host, options.control_port};
-  scene_options.session_id = "yolo-detect";
-  auto scene =
-      std::make_unique<daedalus_sdk::SceneControlClient>(scene_options);
+  std::unique_ptr<daedalus_sdk::SceneControlClient> scene;
   std::string control_message;
-  bool control_available = reportControl(
-      scene->createSession(), "createSession", control_message);
-  bool control_ok = control_available;
+  bool control_available = false;
+  bool control_ok = false;
+  if (options.passive_recording) {
+    control_message = "passive raw recorder: scene and gimbal control disabled";
+  } else {
+    daedalus_sdk::SceneControlOptions scene_options;
+    scene_options.endpoint = {options.host, options.control_port};
+    scene_options.session_id = "yolo-detect";
+    scene = std::make_unique<daedalus_sdk::SceneControlClient>(scene_options);
+    control_available = reportControl(
+        scene->createSession(), "createSession", control_message);
+    control_ok = control_available;
+  }
   daedalus_sdk::UdpGimbalClient gimbal(
       {options.host, options.gimbal_port});
   yolo_detect::control::DynamicTargetController gimbal_control;
@@ -1152,6 +1190,8 @@ int main(int argc, char** argv) {
     scene_state.motion = options.startup_motion;
     control_ok = applyMotion(*scene, scene_state, control_message);
   }
+  if (options.startup_dynamic_follow) gimbal_control.toggleFollowing();
+  if (options.startup_continuous_fire) gimbal_control.requestFire();
 
   daedalus_sdk::TcpImageClient images({options.host, options.port});
   const daedalus_sdk::ClientStatus connected = images.connect();
@@ -1192,6 +1232,10 @@ int main(int argc, char** argv) {
   std::size_t latest_pose_count = 0;
   cv::VideoWriter recorder;
   bool recorder_opened = false;
+  std::uint64_t recording_armed_timestamp_ns = 0;
+  std::uint64_t recording_started_timestamp_ns = 0;
+  std::uint64_t next_record_timestamp_ns = 0;
+  std::uint64_t recorded_frame_count = 0;
 
   auto requestScene = [&](daedalus_sdk::SceneMode requested,
                           const char* name) {
@@ -1582,6 +1626,72 @@ int main(int argc, char** argv) {
                      ? cv::COLOR_RGBA2BGR
                      : cv::COLOR_RGB2BGR);
 
+    // Raw recording intentionally runs before inference and annotation. This
+    // preserves the source-frame cadence and guarantees that a requested
+    // camera-time duration matches the encoded video duration.
+    if (!options.record_path.empty()) {
+      if (recording_armed_timestamp_ns == 0) {
+        recording_armed_timestamp_ns = header.capture_timestamp_ns;
+      }
+      if (!recorder_opened) {
+        const std::uint64_t delay_ns = static_cast<std::uint64_t>(
+            std::llround(options.record_delay_s * 1e9));
+        if (header.capture_timestamp_ns - recording_armed_timestamp_ns <
+            delay_ns) {
+          // Keep the normal tracking/fire loop running during the warm-up.
+        } else {
+        const std::filesystem::path parent = options.record_path.parent_path();
+        if (!parent.empty()) {
+          std::error_code error;
+          std::filesystem::create_directories(parent, error);
+          if (error) {
+            std::cerr << "record directory creation failed: "
+                      << parent.string() << ": " << error.message() << '\n';
+            break;
+          }
+        }
+        const std::string extension = options.record_path.extension().string();
+        const int codec = extension == ".avi" || extension == ".AVI"
+                              ? cv::VideoWriter::fourcc('M', 'J', 'P', 'G')
+                              : cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+        recorder_opened = recorder.open(options.record_path.string(), codec,
+                                        options.record_fps, bgr.size(), true);
+        if (!recorder_opened) {
+          std::cerr << "record open failed: " << options.record_path.string()
+                    << " (try an .avi path)\n";
+          break;
+        }
+        recording_started_timestamp_ns = header.capture_timestamp_ns;
+        next_record_timestamp_ns = recording_started_timestamp_ns;
+        std::cout << "recording original camera video: "
+                  << options.record_path.string() << " at "
+                  << fixed(options.record_fps, 1) << " FPS\n";
+        }
+      }
+      if (recorder_opened) {
+        const std::uint64_t duration_ns = static_cast<std::uint64_t>(
+            std::llround(options.record_duration_s * 1e9));
+        if (options.record_duration_s > 0.0 &&
+            header.capture_timestamp_ns - recording_started_timestamp_ns >=
+                duration_ns) {
+          break;
+        }
+        const std::uint64_t interval_ns = static_cast<std::uint64_t>(
+            std::llround(1e9 / options.record_fps));
+        // Fill a fixed camera-time grid. When tracking takes longer than one
+        // output interval, repeat the latest unannotated camera frame rather
+        // than shortening the encoded video.
+        while (header.capture_timestamp_ns >= next_record_timestamp_ns &&
+               (options.record_duration_s <= 0.0 ||
+                next_record_timestamp_ns - recording_started_timestamp_ns <
+                    duration_ns)) {
+          recorder.write(bgr);
+          ++recorded_frame_count;
+          next_record_timestamp_ns += interval_ns;
+        }
+      }
+    }
+
     const auto inference_started = Clock::now();
     std::vector<yolo_detect::ArmorDetection> detections;
     try {
@@ -1819,38 +1929,6 @@ int main(int argc, char** argv) {
                              reliable_yaws, tracker_measurements));
       }
 
-      if (!options.record_path.empty()) {
-        if (!recorder_opened) {
-          const std::filesystem::path parent =
-              options.record_path.parent_path();
-          if (!parent.empty()) {
-            std::error_code error;
-            std::filesystem::create_directories(parent, error);
-            if (error) {
-              std::cerr << "record directory creation failed: "
-                        << parent.string() << ": " << error.message() << '\n';
-              break;
-            }
-          }
-          const std::string extension = options.record_path.extension().string();
-          const int codec = extension == ".avi" || extension == ".AVI"
-                                ? cv::VideoWriter::fourcc('M', 'J', 'P', 'G')
-                                : cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-          recorder_opened = recorder.open(options.record_path.string(), codec,
-                                          options.record_fps, annotated.size(),
-                                          true);
-          if (!recorder_opened) {
-            std::cerr << "record open failed: " << options.record_path.string()
-                      << " (try an .avi path)\n";
-            break;
-          }
-          std::cout << "recording annotated video: "
-                    << options.record_path.string() << " at "
-                    << fixed(options.record_fps, 1) << " FPS\n";
-        }
-        recorder.write(annotated);
-      }
-
       if (!options.no_display) {
         cv::Mat display;
         const double display_scale = std::min(
@@ -1910,6 +1988,7 @@ int main(int argc, char** argv) {
   const double run_seconds =
       std::chrono::duration<double>(Clock::now() - run_started).count();
   std::cout << "summary frames=" << received_count
+            << " recorded_frames=" << recorded_frame_count
             << " elapsed_s=" << fixed(run_seconds, 2)
             << " process_fps="
             << fixed(run_seconds > 0.0 ? received_count / run_seconds : 0.0)

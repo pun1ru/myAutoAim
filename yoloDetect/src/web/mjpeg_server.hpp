@@ -105,18 +105,18 @@ struct WebTrackerMeasurementTelemetry {
 
 // Runtime EKF tuning values shown and edited by the web debugger.
 struct WebEkfTuningTelemetry {
-  double initial_position_std_m = 0.25;
-  double initial_velocity_std_mps = 1.0;
-  double initial_theta_std_rad = 0.35;
-  double initial_omega_std_rad_s = 8.0;
-  double initial_geometry_std_m = 0.15;
-  double q_linear_acceleration = 0.02;
-  double q_angular_acceleration = 1.0;
+  double initial_position_std_m = 1.0;
+  double initial_velocity_std_mps = 8.0;
+  double initial_theta_std_rad = 0.6324555320336759;
+  double initial_omega_std_rad_s = 10.0;
+  double initial_geometry_std_m = 1.0;
+  double q_linear_acceleration = 100.0;
+  double q_angular_acceleration = 400.0;
   double q_geometry = 0.0;
   double position_std_x_m = 0.03;
   double position_std_y_m = 0.03;
   double position_std_z_m = 0.08;
-  double yaw_facing_base_variance_rad2 = 9e-2;
+  double yaw_facing_base_variance_rad2 = 1.0;
   double yaw_facing_log_variance_scale_rad2 = 1.0 / 200.0;
   double single_armor_position_variance_scale = 25.0;
   double association_position_variance_scale = 100.0;

@@ -49,6 +49,7 @@ DynamicTargetController::DynamicTargetController(
 void DynamicTargetController::toggleFollowing() {
   if (following_) {
     following_ = false;
+    continuous_fire_ = false;
     fire_pending_ = false;
     last_command_fired_ = false;
     active_target_odom_m_.reset();
@@ -62,24 +63,26 @@ void DynamicTargetController::toggleFollowing() {
 }
 
 void DynamicTargetController::requestFire(TimePoint now) {
-  fire_pending_ = true;
+  continuous_fire_ = !continuous_fire_;
+  fire_pending_ = continuous_fire_;
   last_command_fired_ = false;
-  fire_requested_at_ = now;
-  status_ = "dynamic fire armed: waiting for alignment";
+  if (continuous_fire_) {
+    fire_requested_at_ = now;
+    status_ = "continuous dynamic fire armed: waiting for alignment";
+  } else {
+    status_ = "continuous dynamic fire stopped";
+  }
 }
 
 DynamicTargetCommand DynamicTargetController::update(
     const std::optional<AimTarget>& predicted_target,
     const coordinates::CoordinateSnapshot& snapshot, TimePoint now) {
   DynamicTargetCommand command;
-  if (fire_pending_ && now - fire_requested_at_ > options_.fire_timeout) {
-    fire_pending_ = false;
-    status_ = "dynamic fire cancelled: alignment timeout";
-  }
+  static_cast<void>(now);
   if (!following_ && !fire_pending_) return command;
   if (!predicted_target || !finite(predicted_target->center_odom_m)) {
     active_target_odom_m_.reset();
-    status_ = fire_pending_ ? "dynamic fire armed: waiting for EKF target"
+    status_ = fire_pending_ ? "continuous dynamic fire: waiting for EKF target"
                             : "dynamic follow: waiting for EKF target";
     return command;
   }
@@ -111,7 +114,7 @@ DynamicTargetCommand DynamicTargetController::update(
   command.distance_m = cv::norm(command.aim.target_center_odom_m -
                                 command.aim.muzzle_center_odom_m);
   status_ = fire_pending_
-                ? (aligned ? "dynamic aligned: fire command ready"
+                ? (aligned ? "continuous dynamic fire: aligned"
                            : alignmentStatus(command.yaw_error_deg,
                                              command.pitch_error_deg))
                 : "dynamic target following";
@@ -123,8 +126,8 @@ void DynamicTargetController::acknowledgeCommand(std::uint64_t command_id,
   last_command_id_ = command_id;
   last_command_fired_ = fired;
   if (fired) {
-    fire_pending_ = false;
-    status_ = following_ ? "shot sent; dynamic follow active" : "shot sent";
+    status_ = following_ ? "continuous shot sent; dynamic follow active"
+                         : "continuous shot sent";
   }
 }
 

@@ -124,6 +124,22 @@ tracking::TrackOutput initializeTracker(tracking::WholeVehicleEkf& ekf,
   return output;
 }
 
+void testSpVisionInitialCovariance() {
+  tracking::WholeVehicleEkf ekf;
+  const tracking::State truth = syntheticState();
+  const std::uint64_t timestamp_ns = 900'000'000ULL;
+  const tracking::TrackOutput output =
+      ekf.update(timestamp_ns, {observationAt(truth, 0, timestamp_ns)});
+  require(output.has_state, "reference P0 test must initialize the EKF");
+  const std::array<double, tracking::kWholeVehicleStateDimension> expected = {
+      1.0, 64.0, 1.0, 64.0, 1.0, 64.0, 0.4, 100.0, 1.0, 1.0, 1.0};
+  for (int index = 0; index < tracking::kWholeVehicleStateDimension; ++index) {
+    requireNear(output.state.covariance(index, index),
+                expected[static_cast<std::size_t>(index)], 1e-12,
+                "sp_vision P0 diagonal mismatch");
+  }
+}
+
 void testSlotSwitchDoesNotJumpCenter() {
   tracking::WholeVehicleEkfOptions options;
   options.confirming_hits = 2;
@@ -237,8 +253,9 @@ void testReliableSingleArmorHasLowWeightAndCannotMoveGeometry() {
               "single armor must not change height difference");
   const double motion_correction =
       (output.state.x.template head<6>() - prior.x.template head<6>()).norm();
-  require(motion_correction > 1e-6 && motion_correction < 0.02,
-          "one rotating armor must have a bounded low-weight motion update");
+  require(std::isfinite(motion_correction) && motion_correction > 1e-6 &&
+              motion_correction < 0.10,
+          "sp_vision P0 must keep a single-armor motion update finite and bounded");
 }
 
 void testGeometryUpdatesOnFirstConsistentMultiArmorFrame() {
@@ -612,6 +629,7 @@ int main() {
     testNoiselessPredictObserve();
     testAnalyticJacobianAgainstFiniteDifference();
     testYawWrap();
+    testSpVisionInitialCovariance();
     testSlotSwitchDoesNotJumpCenter();
     testMinimumCostAssociationDoesNotReject();
     testTwoVisibleArmorsAssociateButOnlyPrimaryUpdates();

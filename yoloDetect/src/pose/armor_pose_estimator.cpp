@@ -13,7 +13,7 @@ namespace {
 
 constexpr double kSmallArmorWidthM = 0.135;
 constexpr double kLargeArmorWidthM = 0.225;
-constexpr double kArmorHeightM = 0.055;
+constexpr double kArmorHeightM = 0.056;
 constexpr double kMinQuadrilateralAreaPx = 4.0;
 constexpr double kGeometryEpsilon = 1e-6;
 

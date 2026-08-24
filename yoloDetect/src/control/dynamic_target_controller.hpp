@@ -56,6 +56,7 @@ class DynamicTargetController {
   GimbalAimSolver aim_solver_;
   DynamicTargetControllerOptions options_;
   bool following_ = false;
+  bool continuous_fire_ = false;
   bool fire_pending_ = false;
   bool last_command_fired_ = false;
   TimePoint fire_requested_at_{};

@@ -143,7 +143,7 @@ void testLevelChassisAimAndBallistics() {
   require(aim.iterations >= 2 && aim.iterations <= 12,
           "muzzle-offset iteration count is invalid");
   require(aim.time_of_flight_s > 0.0, "time of flight must be positive");
-  verifyProjectileHit(aim, snapshot, target);
+  verifyProjectileHit(aim, snapshot, aim.target_center_odom_m);
 }
 
 // 验证底盘偏航被正确从云台绝对指令中消除。
