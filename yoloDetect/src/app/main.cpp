@@ -1,4 +1,5 @@
 #include "control/gimbal_aim_solver.hpp"
+#include "control/dynamic_target_controller.hpp"
 #include "control/static_target_controller.hpp"
 #include "coordinates/simulator_pose_adapter.hpp"
 #include "detection/yolo_pose_detector.hpp"
@@ -26,6 +27,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -558,7 +560,7 @@ void drawDetection(cv::Mat& image,
   const cv::Rect box(cvRound(detection.box.x), cvRound(detection.box.y),
                      cvRound(detection.box.width),
                      cvRound(detection.box.height));
-  cv::rectangle(image, box, cv::Scalar(255, 120, 30), 2, cv::LINE_AA);
+  cv::rectangle(image, box, cv::Scalar(255, 120, 30), 1, cv::LINE_AA);
 
   const std::array<cv::Scalar, yolo_detect::KeypointCount> colors = {
       cv::Scalar(0, 255, 255),    // bottom-left
@@ -578,13 +580,13 @@ void drawDetection(cv::Mat& image,
       all_visible = false;
       continue;
     }
-    cv::circle(image, point, 5, colors[index], cv::FILLED, cv::LINE_AA);
+    cv::circle(image, point, 3, colors[index], cv::FILLED, cv::LINE_AA);
     cv::putText(image, std::to_string(index + 1), point + cv::Point(6, -6),
                 cv::FONT_HERSHEY_SIMPLEX, 0.5, colors[index], 2,
                 cv::LINE_AA);
   }
   if (all_visible) {
-    cv::polylines(image, polygon, true, cv::Scalar(30, 210, 255), 2,
+    cv::polylines(image, polygon, true, cv::Scalar(30, 210, 255), 1,
                   cv::LINE_AA);
   }
 
@@ -749,6 +751,60 @@ void drawProjectionDebugCenters(
   }
 }
 
+// Select the armor whose outward normal most directly faces the current
+// camera, then solve the target position at the self-consistent flight time.
+std::optional<yolo_detect::control::AimTarget> makeDynamicAimTarget(
+    const yolo_detect::tracking::TrackOutput& tracker_output,
+    const yolo_detect::coordinates::CoordinateSnapshot& snapshot,
+    const yolo_detect::control::GimbalAimSolver& aim_solver) {
+  if (!tracker_output.has_state || !snapshot.valid) return std::nullopt;
+
+  double horizon_s = 0.0;
+  std::optional<yolo_detect::control::AimTarget> selected;
+  for (int iteration = 0; iteration < 10; ++iteration) {
+    double best_facing = -std::numeric_limits<double>::infinity();
+    std::optional<yolo_detect::tracking::DecodedArmor> best_armor;
+    for (int slot = 0; slot < yolo_detect::tracking::kArmorSlotCount; ++slot) {
+      const yolo_detect::tracking::DecodedArmor armor =
+          yolo_detect::tracking::decodeArmor(tracker_output.state, slot,
+                                              horizon_s);
+      const Eigen::Vector3d camera_to_armor =
+          armor.position_T_m - Eigen::Vector3d(
+                                    snapshot.camera_position_odom_m[0],
+                                    snapshot.camera_position_odom_m[1],
+                                    snapshot.camera_position_odom_m[2]);
+      const double range = camera_to_armor.norm();
+      if (!armor.position_T_m.allFinite() || !std::isfinite(range) ||
+          range <= 1e-6) {
+        continue;
+      }
+      const Eigen::Vector3d outward_normal(
+          -std::cos(armor.inward_yaw_T_rad),
+          -std::sin(armor.inward_yaw_T_rad), 0.0);
+      const double facing = outward_normal.dot(-camera_to_armor / range);
+      if (std::isfinite(facing) && facing > best_facing) {
+        best_facing = facing;
+        best_armor = armor;
+      }
+    }
+    if (!best_armor) return std::nullopt;
+    selected = yolo_detect::control::AimTarget{
+        {best_armor->position_T_m.x(), best_armor->position_T_m.y(),
+         best_armor->position_T_m.z()},
+        true, horizon_s};
+    const yolo_detect::control::GimbalAimResult trial =
+        aim_solver.solve(*selected, snapshot);
+    if (!trial.valid || !std::isfinite(trial.time_of_flight_s)) {
+      return std::nullopt;
+    }
+    if (std::abs(trial.time_of_flight_s - horizon_s) < 1e-3) {
+      return selected;
+    }
+    horizon_s = trial.time_of_flight_s;
+  }
+  return selected;
+}
+
 // 将本帧的位姿、坐标和控制器状态组装为网页遥测。
 yolo_detect::WebFrameTelemetry makeWebTelemetry(
     std::uint64_t source_sequence,
@@ -756,7 +812,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
     const std::vector<DetectionAim>& detection_aims,
     const yolo_detect::coordinates::CoordinateSnapshot& coordinate_snapshot,
     const std::string& coordinate_message,
-    const yolo_detect::control::StaticTargetController& gimbal_control,
+    const yolo_detect::control::DynamicTargetController& gimbal_control,
     const SceneState& scene_state,
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::tracking::WholeVehicleEkfOptions& ekf_options,
@@ -779,12 +835,13 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   tuning.q_linear_acceleration = ekf_options.q_linear_acceleration;
   tuning.q_angular_acceleration = ekf_options.q_angular_acceleration;
   tuning.q_geometry = ekf_options.q_geometry;
-  tuning.position_std_xy_m = ekf_options.position_std_xy_m;
+  tuning.position_std_x_m = ekf_options.position_std_x_m;
+  tuning.position_std_y_m = ekf_options.position_std_y_m;
   tuning.position_std_z_m = ekf_options.position_std_z_m;
-  tuning.yaw_std_rad = ekf_options.yaw_std_rad;
-  tuning.reprojection_rms_scale = ekf_options.reprojection_rms_scale;
-  tuning.range_noise_scale_per_m = ekf_options.range_noise_scale_per_m;
-  tuning.minimum_quality = ekf_options.minimum_quality;
+  tuning.yaw_facing_base_variance_rad2 =
+      ekf_options.yaw_facing_base_variance_rad2;
+  tuning.yaw_facing_log_variance_scale_rad2 =
+      ekf_options.yaw_facing_log_variance_scale_rad2;
   tuning.single_armor_position_variance_scale =
       ekf_options.single_armor_position_variance_scale;
   tuning.association_position_variance_scale =
@@ -799,6 +856,9 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   tuning.adjacent_slot_penalty = ekf_options.adjacent_slot_penalty;
   tuning.opposite_slot_penalty = ekf_options.opposite_slot_penalty;
   tuning.minimum_visibility_cosine = ekf_options.minimum_visibility_cosine;
+  tuning.slot_position_cost_weight = ekf_options.slot_position_cost_weight;
+  tuning.slot_yaw_cost_weight_m_per_rad =
+      ekf_options.slot_yaw_cost_weight_m_per_rad;
   tuning.geometry_yaw_consistency_rad = ekf_options.geometry_yaw_consistency_rad;
   tuning.geometry_minimum_baseline_m = ekf_options.geometry_minimum_baseline_m;
   tuning.geometry_confirming_frames = ekf_options.geometry_confirming_frames;
@@ -901,7 +961,7 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
          measurement.yaw_std_rad, measurement.reprojection_rms_px,
          measurement.confidence, measurement.keypoint_quality,
          measurement.view_quality, measurement.color_id, measurement.number_id,
-         associated, associated && association->includes_yaw,
+         associated, measurement.selected_for_ekf,
          associated ? association->armor_slot : -1,
          associated ? association->nis : 0.0,
          associated ? association->predicted_position_T_m.x() : 0.0,
@@ -928,14 +988,14 @@ yolo_detect::WebFrameTelemetry makeWebTelemetry(
   telemetry.last_gimbal_command_id = gimbal_control.lastCommandId();
   telemetry.last_command_fired = gimbal_control.lastCommandFired();
   telemetry.static_target_valid =
-      gimbal_control.staticTargetOdomM().has_value();
-  if (gimbal_control.staticTargetOdomM()) {
+      gimbal_control.activeTargetOdomM().has_value();
+  if (gimbal_control.activeTargetOdomM()) {
     telemetry.static_target_odom_x_m =
-        (*gimbal_control.staticTargetOdomM())[0];
+        (*gimbal_control.activeTargetOdomM())[0];
     telemetry.static_target_odom_y_m =
-        (*gimbal_control.staticTargetOdomM())[1];
+        (*gimbal_control.activeTargetOdomM())[1];
     telemetry.static_target_odom_z_m =
-        (*gimbal_control.staticTargetOdomM())[2];
+        (*gimbal_control.activeTargetOdomM())[2];
   }
   telemetry.poses.reserve(poses.size());
   for (std::size_t index = 0; index < poses.size(); ++index) {
@@ -1070,7 +1130,7 @@ int main(int argc, char** argv) {
   bool control_ok = control_available;
   daedalus_sdk::UdpGimbalClient gimbal(
       {options.host, options.gimbal_port});
-  yolo_detect::control::StaticTargetController gimbal_control;
+  yolo_detect::control::DynamicTargetController gimbal_control;
 
   if (control_available && options.startup_scene != "unchanged") {
     daedalus_sdk::SceneMode startup_scene;
@@ -1226,12 +1286,11 @@ int main(int argc, char** argv) {
       else if (name == "q_linear_acceleration") tuned.q_linear_acceleration = value;
       else if (name == "q_angular_acceleration") tuned.q_angular_acceleration = value;
       else if (name == "q_geometry") tuned.q_geometry = value;
-      else if (name == "position_std_xy_m") tuned.position_std_xy_m = value;
+      else if (name == "position_std_x_m") tuned.position_std_x_m = value;
+      else if (name == "position_std_y_m") tuned.position_std_y_m = value;
       else if (name == "position_std_z_m") tuned.position_std_z_m = value;
-      else if (name == "yaw_std_rad") tuned.yaw_std_rad = value;
-      else if (name == "reprojection_rms_scale") tuned.reprojection_rms_scale = value;
-      else if (name == "range_noise_scale_per_m") tuned.range_noise_scale_per_m = value;
-      else if (name == "minimum_quality") tuned.minimum_quality = value;
+      else if (name == "yaw_facing_base_variance_rad2") tuned.yaw_facing_base_variance_rad2 = value;
+      else if (name == "yaw_facing_log_variance_scale_rad2") tuned.yaw_facing_log_variance_scale_rad2 = value;
       else if (name == "single_armor_position_variance_scale") tuned.single_armor_position_variance_scale = value;
       else if (name == "association_position_variance_scale") tuned.association_position_variance_scale = value;
       else if (name == "maximum_multi_armor_position_residual_m") tuned.maximum_multi_armor_position_residual_m = value;
@@ -1241,6 +1300,8 @@ int main(int argc, char** argv) {
       else if (name == "adjacent_slot_penalty") tuned.adjacent_slot_penalty = value;
       else if (name == "opposite_slot_penalty") tuned.opposite_slot_penalty = value;
       else if (name == "minimum_visibility_cosine") tuned.minimum_visibility_cosine = value;
+      else if (name == "slot_position_cost_weight") tuned.slot_position_cost_weight = value;
+      else if (name == "slot_yaw_cost_weight_m_per_rad") tuned.slot_yaw_cost_weight_m_per_rad = value;
       else if (name == "geometry_yaw_consistency_rad") tuned.geometry_yaw_consistency_rad = value;
       else if (name == "geometry_minimum_baseline_m") tuned.geometry_minimum_baseline_m = value;
       else if (name == "geometry_confirming_frames") {
@@ -1275,6 +1336,10 @@ int main(int argc, char** argv) {
     try {
       const double value = std::stod(payload.substr(separator + 1));
       if (!std::isfinite(value)) return false;
+      // Observed anchoring rewrites center/theta every frame. A manual edit
+      // must take ownership immediately instead of being overwritten by the
+      // next telemetry update.
+      projection_debug.anchor_observed = false;
       if (name == "center_x_T_m") projection_debug.center_x_T_m = value;
       else if (name == "center_y_T_m") projection_debug.center_y_T_m = value;
       else if (name == "center_z_T_m") projection_debug.center_z_T_m = value;
@@ -1575,6 +1640,21 @@ int main(int argc, char** argv) {
         }
       }
     }
+    if (!tracker_measurements.empty()) {
+      // A single board feeds the EKF. When two or more are visible, choose
+      // the lower constrained-reprojection RMS while retaining all boards for
+      // E0..E3 slot association and diagnostic rendering.
+      for (auto& measurement : tracker_measurements) {
+        measurement.selected_for_ekf = false;
+      }
+      const auto primary = std::min_element(
+          tracker_measurements.begin(), tracker_measurements.end(),
+          [](const yolo_detect::tracking::Measurement& left,
+             const yolo_detect::tracking::Measurement& right) {
+            return left.reprojection_rms_px < right.reprojection_rms_px;
+          });
+      primary->selected_for_ekf = true;
+    }
     std::optional<yolo_detect::tracking::Measurement> projection_reference;
     if (projection_debug.enabled && projection_debug.anchor_observed) {
       projection_debug.has_reference = false;
@@ -1617,24 +1697,10 @@ int main(int argc, char** argv) {
             detection_aims.begin(), detection_aims.end(),
             [](const DetectionAim& item) { return item.aim.valid; }));
 
-    std::optional<cv::Vec3d> capture_candidate_odom_m;
-    double best_reprojection_rms_px =
-        std::numeric_limits<double>::infinity();
-    for (std::size_t index = 0; index < poses.size(); ++index) {
-      if (!poses[index].valid ||
-          !detection_aims[index].coordinate_valid ||
-          !std::isfinite(poses[index].reprojection_rms_px)) {
-        continue;
-      }
-      if (poses[index].reprojection_rms_px < best_reprojection_rms_px) {
-        best_reprojection_rms_px = poses[index].reprojection_rms_px;
-        capture_candidate_odom_m = detection_aims[index].center_odom_m;
-      }
-    }
-
-    const yolo_detect::control::StaticTargetCommand gimbal_command =
-        gimbal_control.update(capture_candidate_odom_m,
-                              coordinate_snapshot);
+    const std::optional<yolo_detect::control::AimTarget> dynamic_target =
+        makeDynamicAimTarget(tracker_output, coordinate_snapshot, aim_solver);
+    const yolo_detect::control::DynamicTargetCommand gimbal_command =
+        gimbal_control.update(dynamic_target, coordinate_snapshot);
     if (gimbal_command.valid) {
       daedalus_sdk::UdpGimbalCommand command;
       command.yaw_deg =

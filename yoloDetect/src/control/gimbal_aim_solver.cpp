@@ -36,7 +36,8 @@ double wrapDegrees(double angle) noexcept {
 void validateOptions(const GimbalAimOptions& options) {
   if (!finite(options.minimum_pitch_command_deg) ||
       !finite(options.maximum_pitch_command_deg) ||
-      !finite(options.convergence_tolerance_rad)) {
+      !finite(options.flight_time_convergence_tolerance_s) ||
+      !finite(options.muzzle_direction_tolerance_rad)) {
     throw std::invalid_argument("gimbal aim options must be finite");
   }
   if (options.minimum_pitch_command_deg >=
@@ -47,7 +48,7 @@ void validateOptions(const GimbalAimOptions& options) {
   if (options.maximum_iterations == 0) {
     throw std::invalid_argument("maximum iterations must be positive");
   }
-  if (options.convergence_tolerance_rad <= 0.0) {
+  if (options.flight_time_convergence_tolerance_s <= 0.0) {
     throw std::invalid_argument("convergence tolerance must be positive");
   }
 }
@@ -78,10 +79,16 @@ GimbalAimSolver::GimbalAimSolver(
     ballistics::VacuumBallisticSolver ballistic_solver,
     GimbalAimOptions options)
     : ballistic_solver_(std::move(ballistic_solver)), options_(options) {
+  // Preserve aggregate-initialization compatibility with callers that were
+  // compiled against the previous four-field options structure.
+  if (options_.muzzle_direction_tolerance_rad <= 0.0) {
+    options_.muzzle_direction_tolerance_rad = 1e-7;
+  }
   validateOptions(options_);
 }
 
-// 迭代计算炮口位置和轨迹，直到绝对指令收敛。
+// Iterate the muzzle-offset solution with sp_vision_25's flight-time
+// convergence condition rather than an arbitrary yaw/pitch delta.
 GimbalAimResult GimbalAimSolver::solve(
     const AimTarget& target,
     const coordinates::CoordinateSnapshot& snapshot) const noexcept {
@@ -100,8 +107,13 @@ GimbalAimResult GimbalAimSolver::solve(
     return result;
   }
 
+  const double muzzle_direction_tolerance_rad =
+      options_.muzzle_direction_tolerance_rad > 0.0
+          ? options_.muzzle_direction_tolerance_rad
+          : 1e-7;
   double yaw_rad = snapshot.gimbal_yaw_rad;
   double elevation_rad = snapshot.gimbal_elevation_rad;
+  double previous_flight_time_s = std::numeric_limits<double>::quiet_NaN();
   ballistics::BallisticSolution ballistic;
 
   for (std::size_t iteration = 1;
@@ -154,11 +166,17 @@ GimbalAimResult GimbalAimSolver::solve(
       return result;
     }
 
-    const bool converged =
+    const bool flight_time_converged =
+        finite(previous_flight_time_s) &&
+        std::abs(ballistic.time_of_flight_s - previous_flight_time_s) <
+            options_.flight_time_convergence_tolerance_s;
+    const bool muzzle_direction_converged =
         std::abs(wrapRadians(next_yaw_rad - yaw_rad)) <=
-            options_.convergence_tolerance_rad &&
+            muzzle_direction_tolerance_rad &&
         std::abs(next_elevation_rad - elevation_rad) <=
-            options_.convergence_tolerance_rad;
+            muzzle_direction_tolerance_rad;
+    const bool converged = flight_time_converged && muzzle_direction_converged;
+    previous_flight_time_s = ballistic.time_of_flight_s;
     yaw_rad = next_yaw_rad;
     elevation_rad = next_elevation_rad;
     if (!converged) continue;

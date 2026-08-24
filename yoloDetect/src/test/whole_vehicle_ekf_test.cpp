@@ -106,6 +106,12 @@ void testYawWrap() {
                                                 179.0 * kPi / 180.0);
   requireNear(innovation, 2.0 * kPi / 180.0, 1e-12,
               "yaw innovation must cross pi boundary through two degrees");
+  tracking::State state = syntheticState();
+  state.x[tracking::Theta] = 0.3;
+  state.x[tracking::Omega] = 200.0;
+  const tracking::State predicted = tracking::predictState(state, 10.0);
+  require(std::abs(predicted.x[tracking::Theta]) <= kPi,
+          "predicted yaw must be wrapped before later angular calculations");
 }
 
 tracking::TrackOutput initializeTracker(tracking::WholeVehicleEkf& ekf,
@@ -147,25 +153,22 @@ void testSlotSwitchDoesNotJumpCenter() {
           "changing visible armor slot must not jump vehicle center");
 }
 
-void testNisOutlierRejected() {
+void testMinimumCostAssociationDoesNotReject() {
   tracking::WholeVehicleEkf ekf;
   const tracking::State state = syntheticState();
   const std::uint64_t t0 = 2'000'000'000ULL;
   initializeTracker(ekf, state, t0);
   tracking::Measurement outlier = observationAt(state, 0, t0 + 10'000'000ULL);
-  outlier.position_T_m += Eigen::Vector3d(20.0, -15.0, 10.0);
+  outlier.position_T_m += Eigen::Vector3d(2.0, -1.5, 0.2);
   const tracking::TrackOutput output = ekf.update(outlier.timestamp_ns, {outlier});
-  require(!output.associated_slot.has_value() && !output.nis.has_value(),
-          "NIS-gated outlier must not update state");
-  require(output.tracking_state == tracking::TrackingState::TemporarilyLost,
-          "outlier frame must transition to temporarily lost");
+  require(output.associated_slot.has_value() && output.nis.has_value(),
+          "slot association must select the minimum-cost slot without a gate");
 }
 
-void testTwoVisibleArmorsUpdateOneFrame() {
+void testTwoVisibleArmorsAssociateButOnlyPrimaryUpdates() {
   tracking::WholeVehicleEkfOptions options;
   options.radius_prior_m = 0.26;
   options.confirming_hits = 1;
-  options.geometry_confirming_frames = 1;
   tracking::WholeVehicleEkf ekf(options);
   tracking::State truth = syntheticState();
   truth.x[tracking::RadiusEven] = 0.32;
@@ -176,21 +179,26 @@ void testTwoVisibleArmorsUpdateOneFrame() {
   truth.x[tracking::VelocityZ] = 0.0;
   truth.x[tracking::Omega] = 0.0;
   const std::uint64_t timestamp_ns = 2'500'000'000ULL;
-  tracking::Measurement second = observationAt(truth, 1, timestamp_ns);
+  initializeTracker(ekf, truth, timestamp_ns);
+  tracking::Measurement first = observationAt(truth, 0, timestamp_ns + 20'000'000ULL);
+  tracking::Measurement second = observationAt(truth, 1, first.timestamp_ns);
   second.color_id = 2;  // Simulate an inconsistent color classification.
+  first.selected_for_ekf = true;
+  second.selected_for_ekf = false;
   const tracking::TrackOutput output = ekf.update(
-      timestamp_ns, {observationAt(truth, 0, timestamp_ns),
-                     second});
+      first.timestamp_ns, {first, second});
   require(output.associated_observations.size() == 2,
-          "two visible armors must both update the same EKF frame");
-  require(output.associated_observations[0].armor_slot == 0 &&
-              output.associated_observations[1].armor_slot == 1,
+          "both visible armors must remain available for slot association");
+  const auto secondary = std::find_if(
+      output.associated_observations.begin(), output.associated_observations.end(),
+      [](const tracking::AssociatedObservation& observation) {
+        return observation.measurement_index == 1;
+      });
+  require(secondary != output.associated_observations.end() &&
+              secondary->armor_slot == 1,
           "one-to-one association must keep the two physical armor slots distinct");
-  require(output.associated_observations[1].measurement_index == 1,
-          "matching number IDs must allow a second armor despite color disagreement");
-  require(std::abs(output.radius_even_m - truth.x[tracking::RadiusEven]) <
-              std::abs(options.radius_prior_m - truth.x[tracking::RadiusEven]),
-          "the second armor observation must reduce radius-prior error");
+  requireNear(output.radius_even_m, options.radius_prior_m, 1e-12,
+              "secondary armor must not update EKF geometry");
   requireNear(output.radius_odd_delta_m, 0.0, 1e-12,
               "fixed odd-radius delta must remain zero");
   requireNear(output.height_odd_delta_m, 0.0, 1e-12,
@@ -548,16 +556,9 @@ void testLostPredictionAndReset() {
   state.x[tracking::VelocityX] = 2.0;
   const std::uint64_t t0 = 3'000'000'000ULL;
   initializeTracker(ekf, state, t0);
-  const tracking::TrackOutput predicted = ekf.update(t0 + 20'000'000ULL, {});
-  require(predicted.has_state &&
-              predicted.tracking_state == tracking::TrackingState::TemporarilyLost,
-          "missed frame must retain predicted track");
-  require(predicted.state.x[tracking::CenterX] > ekf.options().radius_prior_m,
-          "missed frame must advance state by exposure timestamp dt");
-  static_cast<void>(ekf.update(t0 + 40'000'000ULL, {}));
-  const tracking::TrackOutput reset = ekf.update(t0 + 60'000'000ULL, {});
+  const tracking::TrackOutput reset = ekf.update(t0 + 20'000'000ULL, {});
   require(!reset.has_state && reset.tracking_state == tracking::TrackingState::Lost,
-          "loss thresholds must clear tracker state");
+          "losing armor observations must immediately reset E0 and the track");
 }
 
 void testJosephCovariance() {
@@ -612,17 +613,10 @@ int main() {
     testAnalyticJacobianAgainstFiniteDifference();
     testYawWrap();
     testSlotSwitchDoesNotJumpCenter();
-    testNisOutlierRejected();
-    testTwoVisibleArmorsUpdateOneFrame();
-    testGeometryUpdatesOnFirstConsistentMultiArmorFrame();
+    testMinimumCostAssociationDoesNotReject();
+    testTwoVisibleArmorsAssociateButOnlyPrimaryUpdates();
     testReliableSingleArmorHasLowWeightAndCannotMoveGeometry();
-    testTemporallyInconsistentYawDoesNotUpdateAngularState();
-    testAngularVelocityCorrectionIsBounded();
-    testPositionOnlySecondArmorConstrainsChassis();
-    testTwoPositionOnlyArmorsConstrainChassis();
-    testJointUpdateIndependentOfDetectionOrder();
     testRotatingSlotSequenceKeepsCenterStable();
-    testMultiArmorFramesRecoverLinearVelocity();
     testSingleReliableArmorFramesDoNotInventLinearVelocity();
     testLostPredictionAndReset();
     testJosephCovariance();

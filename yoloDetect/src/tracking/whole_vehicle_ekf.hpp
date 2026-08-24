@@ -15,9 +15,9 @@ namespace yolo_detect::tracking {
 //      exposure snapshot into a Measurement in tracker frame T.
 //   2. constrained_yaw_solver independently validates inward yaw by
 //      constrained reprojection; PnP rvec is never used as vehicle yaw.
-//   3. WholeVehicleEkf predicts this 11-state vehicle model, associates every
-//      measurement with one physical slot E0..E3, then performs one joint
-//      fixed-size Eigen update for the accepted set.
+//   3. WholeVehicleEkf predicts this 11-state vehicle model and associates
+//      every visible measurement with one physical slot E0..E3. Only the
+//      selected primary observation updates the EKF state.
 //   4. decodeArmor expands the posterior back into E0..E3 for the yellow
 //      image markers and web telemetry.
 //
@@ -29,7 +29,8 @@ inline constexpr int kArmorObservationDimension = 4;
 inline constexpr int kArmorSlotCount = 4;
 
 enum StateIndex : int {
-  // theta is the continuous inward yaw of E0 and is never wrapped in State.
+  // theta is the inward yaw of E0 and is wrapped to [-pi, pi) after every
+  // prediction and update.
   // For slot i: phi=theta+i*pi/2, r=r0+(i%2)*dr, z=cz+(i%2)*dz, and
   // armor center=(cx-r*cos(phi), cy-r*sin(phi), z).
   // 状态排列为 [cx,vx, cy,vy, cz,vz, theta,omega, r0,dr,dz]。
@@ -93,6 +94,9 @@ struct Measurement {
   double keypoint_quality = 1.0;
   double view_quality = 1.0;
   bool has_inward_yaw = false;
+  // The application selects one board per frame for the EKF update. Other
+  // visible boards still participate in slot association and telemetry.
+  bool selected_for_ekf = true;
   // Exposure-time camera geometry. R_TC maps camera vectors into tracker T.
   Eigen::Matrix3d R_TC = Eigen::Matrix3d::Identity();
   Eigen::Vector3d camera_position_T_m = Eigen::Vector3d::Zero();
@@ -100,7 +104,8 @@ struct Measurement {
 };
 
 struct State {
-  // x 是连续 theta 的内部状态，不在每帧 wrap；covariance 与 x 一一对应。
+  // theta is wrapped after prediction and update; covariance is aligned with
+  // this same state representation.
   Vector11 x = Vector11::Zero();
   Matrix11 covariance = Matrix11::Identity();
 };
@@ -161,12 +166,14 @@ struct WholeVehicleEkfOptions {
   // Vehicle geometry is static during one track. It is updated only by a
   // geometrically consistent multi-armor frame, not by process random walk.
   double q_geometry = 0.0;
-  // 基础观测标准差。R 会再按质量、重投影 RMS 和相机量测距离放大。
-  double position_std_xy_m = 0.03;
+  // 固定的单帧 PnP 观测标准差，分别对应相机 X/Y/深度方向。
+  double position_std_x_m = 0.03;
+  double position_std_y_m = 0.03;
   double position_std_z_m = 0.10;
-  double yaw_std_rad = 0.15;
-  double reprojection_rms_scale = 0.15;
-  double range_noise_scale_per_m = 0.025;
+  // Rtheta = base + log(1 + facing_angle) * scale, following the
+  // sp_vision_25 yaw-noise form. Values are variances in rad^2.
+  double yaw_facing_base_variance_rad2 = 9e-2;
+  double yaw_facing_log_variance_scale_rad2 = 1.0 / 200.0;
   // A single plate observes center only through the configured radius and is
   // therefore much weaker than a simultaneous multi-plate observation.
   double single_armor_position_variance_scale = 25.0;
@@ -174,10 +181,12 @@ struct WholeVehicleEkfOptions {
   // can recover after a motion reversal without accepting the residual at
   // full EKF weight.
   double association_position_variance_scale = 100.0;
-  double minimum_quality = 0.05;
-  // Association may use a larger yaw range than the EKF update. A temporally
-  // inconsistent reprojection yaw can still help select a slot, but it must
-  // not inject a false angular-velocity correction.
+  // Association has no rejection threshold. It selects the minimum weighted
+  // x-y distance plus wrapped yaw difference.
+  double slot_position_cost_weight = 1.0;
+  double slot_yaw_cost_weight_m_per_rad = 0.20;
+  // Legacy tuning fields are retained so saved runtime tuning requests remain
+  // accepted. The current cost-based association does not use them.
   double maximum_yaw_update_innovation_rad = 0.35;
   double maximum_yaw_association_innovation_rad = 1.80;
   double yaw_phase_cost_std_rad = 0.35;

@@ -117,6 +117,7 @@ target_link_libraries(simulator_pose_adapter PUBLIC
 )
 
 add_library(gimbal_aim STATIC
+    src/control/dynamic_target_controller.cpp
     src/control/gimbal_aim_solver.cpp
     src/control/static_target_controller.cpp
 )

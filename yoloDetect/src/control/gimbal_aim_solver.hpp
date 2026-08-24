@@ -28,8 +28,14 @@ struct AimTarget {
 struct GimbalAimOptions {
   double minimum_pitch_command_deg = 45.0;
   double maximum_pitch_command_deg = 135.0;
-  std::size_t maximum_iterations = 12;
-  double convergence_tolerance_rad = 1e-7;
+  // Match sp_vision_25: at most ten flight-time fixed-point iterations,
+  // converging when adjacent time-of-flight estimates differ by under 1 ms.
+  std::size_t maximum_iterations = 10;
+  double flight_time_convergence_tolerance_s = 1e-3;
+  // The reference pipeline has no muzzle-offset fixed point. This additional
+  // check ensures the simulator's moving muzzle has settled before a command
+  // is emitted.
+  double muzzle_direction_tolerance_rad = 1e-7;
 };
 
 struct GimbalAimResult {

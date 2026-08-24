@@ -222,7 +222,7 @@ std::string htmlPage() {
   <div class="pose-heading"><h2 id="ekf-observation-title">EKF Measurements and Association (T)</h2></div>
   <div class="observation-table-wrap">
     <table>
-      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>Yaw used</th><th>IPPE 0 out deg</th><th>IPPE 1 out deg</th><th>Reproj out deg</th><th>IPPE pitch deg</th><th>Predicted yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
+      <thead><tr><th>Obs</th><th>T X m</th><th>T Y m</th><th>T Z m</th><th>Camera range m</th><th>Yaw valid</th><th>EKF input</th><th>IPPE 0 out deg</th><th>IPPE 1 out deg</th><th>Reproj out deg</th><th>IPPE pitch deg</th><th>Predicted yaw deg</th><th>Yaw std deg</th><th>PnP RMS px</th><th>Confidence</th><th>Keypoint Q</th><th>View Q</th><th>Color ID</th><th>Number ID</th><th>Slot</th><th>NIS</th><th>Pred x</th><th>Pred y</th><th>Pred z</th><th>dx</th><th>dy</th><th>dz</th><th>Radial d</th><th>Yaw d deg</th></tr></thead>
       <tbody id="ekf-observation-rows"><tr><td colspan="29">No EKF measurements</td></tr></tbody>
     </table>
   </div>
@@ -239,10 +239,11 @@ std::string htmlPage() {
   <div class="control-row"><span class="control-label">Vehicle motion</span><button class="stop" data-action="motion-stop">Stop Vehicle</button><button data-action="motion-linear">Linear</button><button data-action="motion-spin">Spin</button><button data-action="motion-linear-spin">Linear + Spin</button></div>
   <div class="control-row"><span class="control-label">Linear speed</span><button data-action="speed-down">Speed -</button><button data-action="speed-up">Speed +</button><span id="linear-speed-state" class="control-label">0.00 m/s</span></div>
   <div class="control-row"><label class="control-label" for="spin-speed">Spin speed</label><input id="spin-speed" class="spin-input" type="number" min="0" max="720" step="1" inputmode="decimal" aria-label="Spin speed in degrees per second"><button id="spin-speed-apply" type="button">Apply deg/s</button><span id="spin-speed-state" class="control-label">0.0 deg/s</span></div>
-  <div class="control-row"><span class="control-label">Gimbal aim</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Start Static Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Fire Once</button><span id="gimbal-state" class="control-label">Gimbal idle</span></div>
+  <div class="control-row"><span class="control-label">Dynamic fire control</span><button id="follow-button" class="follow" data-action="gimbal-follow-toggle" aria-pressed="false">Enable Dynamic Follow</button><button id="fire-button" class="fire" data-action="gimbal-fire">Dynamic Fire Once</button><span id="gimbal-state" class="control-label">Dynamic follow idle</span></div>
 </section>
 <section class="control-panel tuning-panel" aria-label="EKF tuning controls">
   <div class="pose-heading tuning-heading"><h2>EKF Tuning</h2><span class="frame-meta">Live Q/R and gates; initial uncertainties apply after reset</span><button data-action="ekf-reset" type="button">Reset EKF Track</button></div>
+  <div class="matrix-grid"><pre id="ekf-q-matrix"></pre><pre id="ekf-r-matrix"></pre><pre id="ekf-p0-matrix"></pre></div>
   <div id="ekf-tuning-controls"></div>
 </section>
 <section class="control-panel tuning-panel" aria-label="Projection debug controls">
@@ -263,6 +264,9 @@ const spinSpeedInput = document.getElementById('spin-speed');
 const spinSpeedState = document.getElementById('spin-speed-state');
 const spinSpeedApply = document.getElementById('spin-speed-apply');
 const ekfTuningControls = document.getElementById('ekf-tuning-controls');
+const ekfQMatrix = document.getElementById('ekf-q-matrix');
+const ekfRMatrix = document.getElementById('ekf-r-matrix');
+const ekfP0Matrix = document.getElementById('ekf-p0-matrix');
 const projectionDebugControls = document.getElementById('projection-debug-controls');
 const ekfDraftValues = new Map();
 const ekfPendingValues = new Map();
@@ -301,29 +305,16 @@ const ekfTuningFields = [
   ['Initial uncertainty', 'initial_theta_std_rad', 'Initial theta std', 'rad', 0.001, 3.2, 0.01],
   ['Initial uncertainty', 'initial_omega_std_rad_s', 'Initial omega std', 'rad/s', 0.001, 30, 0.01],
   ['Initial uncertainty', 'initial_geometry_std_m', 'Initial geometry std', 'm', 0.001, 1, 0.01],
-  ['Process noise Q', 'q_linear_acceleration', 'Linear acceleration density', 'm^2/s^3', 0, 100, 0.001],
-  ['Process noise Q', 'q_angular_acceleration', 'Angular acceleration density', 'rad^2/s^3', 0, 100, 0.001],
-  ['Process noise Q', 'q_geometry', 'Geometry random walk', 'm^2/s', 0, 10, 0.001],
-  ['Measurement noise R', 'position_std_xy_m', 'Position XY std', 'm', 0.001, 1, 0.001],
-  ['Measurement noise R', 'position_std_z_m', 'Position Z std', 'm', 0.001, 2, 0.001],
-  ['Measurement noise R', 'yaw_std_rad', 'Yaw std', 'rad', 0.001, 3.2, 0.001],
-  ['Measurement noise R', 'reprojection_rms_scale', 'Reprojection RMS scale', '', 0, 10, 0.001],
-  ['Measurement noise R', 'range_noise_scale_per_m', 'Range noise scale', 'per m', 0, 2, 0.001],
-  ['Measurement noise R', 'minimum_quality', 'Minimum quality', '', 0.001, 1, 0.001],
-  ['Multi-armor weighting', 'single_armor_position_variance_scale', 'Single-plate variance scale', 'x', 1, 1000, 1],
-  ['Multi-armor weighting', 'association_position_variance_scale', 'Association position scale', 'x', 1, 2000, 1],
-  ['Multi-armor weighting', 'maximum_multi_armor_position_residual_m', 'Max multi-plate residual', 'm', 0.001, 2, 0.001],
-  ['Slot association', 'maximum_yaw_update_innovation_rad', 'Yaw used gate (EKF update)', 'rad', 0.001, 3.2, 0.001],
-  ['Slot association', 'maximum_yaw_association_innovation_rad', 'Yaw association gate', 'rad', 0.001, 3.2, 0.001],
-  ['Slot association', 'yaw_phase_cost_std_rad', 'Yaw phase cost std', 'rad', 0.001, 3.2, 0.001],
-  ['Slot association', 'adjacent_slot_penalty', 'Adjacent slot penalty', '', 0, 100, 0.01],
-  ['Slot association', 'opposite_slot_penalty', 'Opposite slot penalty', '', 0, 100, 0.01],
-  ['Slot association', 'minimum_visibility_cosine', 'Minimum visibility cosine', '', -1, 1, 0.01],
-  ['Geometry gate', 'geometry_yaw_consistency_rad', 'Geometry yaw consistency', 'rad', 0.001, 3.2, 0.001],
-  ['Geometry gate', 'geometry_minimum_baseline_m', 'Minimum plate baseline', 'm', 0.001, 2, 0.001],
-  ['Geometry gate', 'geometry_confirming_frames', 'Geometry confirming frames', 'frames', 1, 100, 1],
-  ['NIS gate', 'nis_gate_3d', 'Position NIS gate', '', 0.001, 100, 0.001],
-  ['NIS gate', 'nis_gate_4d', 'Position+yaw NIS gate', '', 0.001, 100, 0.001],
+  ['Process noise Q', 'q_linear_acceleration', 'Unmodeled chassis acceleration', 'm^2/s^3', 0, 100, 0.001],
+  ['Process noise Q', 'q_angular_acceleration', 'Unmodeled spin acceleration', 'rad^2/s^3', 0, 100, 0.001],
+  ['Process noise Q', 'q_geometry', 'Armor-radius drift', 'm^2/s', 0, 10, 0.001],
+  ['Measurement noise R', 'position_std_x_m', 'PnP camera X one-sigma (Rx)', 'm', 0.001, 1, 0.001],
+  ['Measurement noise R', 'position_std_y_m', 'PnP camera Y one-sigma (Ry)', 'm', 0.001, 1, 0.001],
+  ['Measurement noise R', 'position_std_z_m', 'PnP depth one-sigma (Rz)', 'm', 0.001, 2, 0.001],
+  ['Measurement noise R', 'yaw_facing_base_variance_rad2', 'Front-facing yaw variance (Rtheta)', 'rad^2', 0.0001, 1, 0.0001],
+  ['Measurement noise R', 'yaw_facing_log_variance_scale_rad2', 'Side-facing yaw variance growth', 'rad^2/rad', 0, 1, 0.0001],
+  ['Slot association', 'slot_position_cost_weight', 'Planar-distance cost weight', '', 0.001, 100, 0.001],
+  ['Slot association', 'slot_yaw_cost_weight_m_per_rad', 'Yaw-difference cost weight', 'm/rad', 0, 10, 0.001],
   ['Angular limits', 'maximum_angular_speed_rad_s', 'Maximum angular speed', 'rad/s', 0.01, 30, 0.01],
   ['Angular limits', 'maximum_omega_correction_rad_s', 'Maximum omega correction/frame', 'rad/s', 0.001, 5, 0.001],
   ['Yaw validity', 'yaw_max_reprojection_rms_px', 'Yaw max reprojection RMS', 'px', 0.001, 20, 0.001],
@@ -331,8 +322,13 @@ const ekfTuningFields = [
   ['Yaw validity', 'yaw_min_facing_cosine', 'Yaw minimum facing cosine', '', -1, 1, 0.001],
   ['Yaw validity', 'yaw_min_opposite_margin_px', 'Yaw opposite-solution margin', 'px', 0, 20, 0.001]
 ];
+const tuningGroupOrder = {
+  'Yaw validity': 0, 'Slot association': 1, 'Initial uncertainty': 2,
+  'Process noise Q': 3, 'Measurement noise R': 4, 'Angular limits': 5
+};
 let tuningGroup = '';
-for (const [group, name, label, unit, min, max, step] of ekfTuningFields) {
+for (const [group, name, label, unit, min, max, step] of [...ekfTuningFields].sort(
+  (left, right) => (tuningGroupOrder[left[0]] ?? 99) - (tuningGroupOrder[right[0]] ?? 99))) {
   if (group !== tuningGroup) {
     const heading = document.createElement('div');
     heading.className = 'tuning-group';
@@ -438,6 +434,37 @@ function refreshParameterInputs(container, parameterValues, drafts, pending, sel
     if (document.activeElement !== input) input.value = actual;
   }
 }
+function renderEkfMatrices(tuning) {
+  const value = (name, fallback) => Number.isFinite(tuning[name]) ? tuning[name].toFixed(4) : fallback;
+  const number = (name) => Number.isFinite(tuning[name]) ? tuning[name] : NaN;
+  const std = (variance) => Math.sqrt(Math.max(0, variance));
+  const degrees = (radians) => radians * 180 / Math.PI;
+  const fixed = (number, digits = 4) => Number.isFinite(number) ? number.toFixed(digits) : '-';
+  const qLinear = number('q_linear_acceleration');
+  const qYaw = number('q_angular_acceleration');
+  const rx = number('position_std_x_m');
+  const ry = number('position_std_y_m');
+  const rz = number('position_std_z_m');
+  const rtheta = number('yaw_facing_base_variance_rad2');
+  ekfQMatrix.textContent = 'Q: allowed model error\nQ(dt) = q * [[dt^3/3, dt^2/2], [dt^2/2, dt]]\n\n1.0 s equivalent one-sigma:\nchassis position: ' +
+    fixed(std(qLinear / 3)) + ' m\nchassis velocity: ' +
+    fixed(std(qLinear)) + ' m/s\nE0 yaw: ' +
+    fixed(degrees(std(qYaw / 3)), 2) + ' deg\nspin speed: ' +
+    fixed(degrees(std(qYaw)), 2) + ' deg/s';
+  ekfRMatrix.textContent = 'R: nominal one-frame PnP error\nR = diag(Rx, Ry, Rz, Rtheta)\n\nRx: sigma=' +
+    fixed(rx) + ' m, variance=' + fixed(rx * rx, 6) + ' m^2\nRy: sigma=' +
+    fixed(ry) + ' m, variance=' + fixed(ry * ry, 6) + ' m^2\nRz: sigma=' +
+    fixed(rz) + ' m, variance=' + fixed(rz * rz, 6) + ' m^2\nRtheta front: sigma=' +
+    fixed(degrees(std(rtheta)), 2) + ' deg, variance=' + fixed(rtheta, 6) +
+    ' rad^2\nside-facing yaw adds log(1 + facing) * ' +
+    value('yaw_facing_log_variance_scale_rad2', 'k');
+  ekfP0Matrix.textContent = 'P0 = diag(s_p^2, s_v^2, s_p^2, s_v^2, s_p^2, s_v^2, s_theta^2, s_omega^2, s_g^2, s_g^2, s_g^2)\ns_p = ' +
+    value('initial_position_std_m', 'sp') + '  s_v = ' +
+    value('initial_velocity_std_mps', 'sv') + '\ns_theta = ' +
+    value('initial_theta_std_rad', 'st') + '  s_omega = ' +
+    value('initial_omega_std_rad_s', 'sw') + '  s_g = ' +
+    value('initial_geometry_std_m', 'sg');
+}
 const trackerXyMap = document.getElementById('ekf-xy-map');
 const inwardYawChart = document.getElementById('inward-yaw-chart');
 const inwardYawLabel = document.getElementById('inward-yaw-label');
@@ -451,18 +478,19 @@ const svgElement = (name, attributes = {}) => {
 };
 const finiteXy = (point) => Number.isFinite(point.x) && Number.isFinite(point.y);
 function renderTrackerXyMap(state) {
-  const predicted = (state.predicted_armors || [])
-    .map((armor) => ({ x: armor.x_T_m, y: armor.y_T_m, slot: armor.armor_slot }))
-    .filter(finiteXy);
-  const observed = (state.tracker_measurements || [])
-    .map((measurement, index) => ({ x: measurement.x_T_m, y: measurement.y_T_m, index }))
-    .filter(finiteXy);
   const cameraMeasurement = (state.tracker_measurements || []).find(
     (measurement) => measurement.has_exposure_camera_geometry &&
       Number.isFinite(measurement.camera_x_T_m) && Number.isFinite(measurement.camera_y_T_m));
-  const camera = cameraMeasurement
+  const origin = cameraMeasurement
     ? { x: cameraMeasurement.camera_x_T_m, y: cameraMeasurement.camera_y_T_m }
-    : null;
+    : { x: 0, y: 0 };
+  const predicted = (state.predicted_armors || [])
+    .map((armor) => ({ x: armor.x_T_m - origin.x, y: armor.y_T_m - origin.y, slot: armor.armor_slot }))
+    .filter(finiteXy);
+  const observed = (state.tracker_measurements || [])
+    .map((measurement, index) => ({ x: measurement.x_T_m - origin.x, y: measurement.y_T_m - origin.y, index }))
+    .filter(finiteXy);
+  const camera = { x: 0, y: 0 };
   const points = [...predicted, ...observed];
   if (camera) points.push(camera);
   trackerXyMap.replaceChildren();
@@ -503,10 +531,10 @@ function renderTrackerXyMap(state) {
     trackerXyMap.append(yLabel);
   }
   const xAxis = svgElement('text', { x: left + width * 0.5, y: 302, 'text-anchor': 'middle' });
-  xAxis.textContent = 'T X (m)';
+  xAxis.textContent = 'Camera-relative X (m)';
   trackerXyMap.append(xAxis);
   const yAxis = svgElement('text', { x: 14, y: top + height * 0.5, transform: 'rotate(-90 14 ' + (top + height * 0.5) + ')', 'text-anchor': 'middle' });
-  yAxis.textContent = 'T Y (m)';
+  yAxis.textContent = 'Camera-relative Y (m)';
   trackerXyMap.append(yAxis);
 
   for (const armor of predicted) {
@@ -531,7 +559,7 @@ function renderTrackerXyMap(state) {
     trackerXyMap.append(label);
   }
   const legend = svgElement('text', { x: left + 4, y: top + 15, class: 'legend' });
-  legend.textContent = 'filled: predicted  diamond: measurement  triangle: camera';
+  legend.textContent = 'filled: slot  diamond: measurement  triangle: camera origin';
   trackerXyMap.append(legend);
 }
 const wrapToPi = (angleRad) => {
@@ -550,26 +578,24 @@ const outwardYawDeg = (inwardYawRad) => wrappedYawDeg(inwardYawRad + Math.PI);
 
   const associated = candidates.filter(({ measurement }) =>
     measurement.association_valid && Number.isInteger(measurement.associated_slot) &&
-    measurement.associated_slot >= 0);
-  const current = associated.find(({ measurement }) =>
-    inwardYawSeriesKey === 'slot:' + measurement.associated_slot);
-  const selected = current || associated[0] || candidates[0];
-  const slot = selected.measurement.association_valid &&
-    Number.isInteger(selected.measurement.associated_slot) &&
-    selected.measurement.associated_slot >= 0
-    ? selected.measurement.associated_slot
-    : null;
-  const key = slot === null ? 'measurement:' + selected.index : 'slot:' + slot;
-  const ekfYawDeg = slot !== null && state.tracker_has_state &&
+    measurement.associated_slot >= 0 && measurement.associated_slot < 4);
+  const selected = associated.find(({ measurement }) =>
+    measurement.associated_slot === 0) || associated[0];
+  if (!selected) return null;
+  const sourceSlot = selected.measurement.associated_slot;
+  const e0InwardYawRad = selected.measurement.inward_yaw_rad -
+    sourceSlot * Math.PI * 0.5;
+  const ekfYawDeg = state.tracker_has_state &&
     Number.isFinite(state.tracker_theta_rad)
-    ? outwardYawDeg(state.tracker_theta_rad + slot * Math.PI * 0.5)
+    ? outwardYawDeg(state.tracker_theta_rad)
     : null;
   return {
-    key,
-    name: slot === null ? 'M' + (selected.index + 1) : 'E' + slot,
-    detectedYawDeg: outwardYawDeg(selected.measurement.inward_yaw_rad),
-    predictedYawDeg: slot !== null && Number.isFinite(selected.measurement.predicted_yaw_rad)
-      ? outwardYawDeg(selected.measurement.predicted_yaw_rad)
+    key: 'slot:0',
+    name: sourceSlot === 0 ? 'E0' : 'E0 from E' + sourceSlot,
+    detectedYawDeg: outwardYawDeg(e0InwardYawRad),
+    predictedYawDeg: Number.isFinite(selected.measurement.predicted_yaw_rad)
+      ? outwardYawDeg(selected.measurement.predicted_yaw_rad -
+          sourceSlot * Math.PI * 0.5)
       : null,
     ekfYawDeg
   };
@@ -683,16 +709,16 @@ async function refreshPose() {
       ' | yaw ' + state.reliable_yaw_count + '/' + state.tracker_observation_count +
       ' | ' + yawDiagnostic;
     followButton.textContent =
-      state.gimbal_following ? 'Stop Static Follow' : 'Start Static Follow';
+      state.gimbal_following ? 'Disable Dynamic Follow' : 'Enable Dynamic Follow';
     followButton.classList.toggle('active', state.gimbal_following);
     followButton.setAttribute('aria-pressed', String(state.gimbal_following));
     fireButton.disabled = state.fire_pending;
-    const staticTarget = state.static_target_valid
-      ? ' | target O=(' + metric(state.static_target_odom_x_m, 3) + ', ' +
+    const dynamicTarget = state.static_target_valid
+      ? ' | predicted armor O=(' + metric(state.static_target_odom_x_m, 3) + ', ' +
         metric(state.static_target_odom_y_m, 3) + ', ' +
         metric(state.static_target_odom_z_m, 3) + ')'
       : '';
-    gimbalState.textContent = state.gimbal_status + staticTarget;
+    gimbalState.textContent = state.gimbal_status + dynamicTarget;
     linearSpeedState.textContent = metric(state.vehicle_speed_mps, 2) + ' m/s';
     spinSpeedState.textContent = metric(state.spin_speed_deg_s, 1) + ' deg/s';
     if (document.activeElement !== spinSpeedInput) {
@@ -701,6 +727,7 @@ async function refreshPose() {
     const tuning = state.ekf_tuning || {};
     refreshParameterInputs(ekfTuningControls, tuning, ekfDraftValues,
       ekfPendingValues, 'input[data-ekf-name]', 'ekfName');
+    renderEkfMatrices(tuning);
     const debug = state.projection_debug || {};
     const debugToggle = document.querySelector('[data-action="projection-debug-toggle"]');
     const debugAnchorToggle = document.querySelector('[data-action="projection-debug-anchor-toggle"]');
@@ -801,7 +828,7 @@ async function refreshPose() {
       row.append(cell(metric(observation.z_T_m, 3)));
       row.append(cell(metric(observation.camera_range_m, 3)));
       row.append(cell(observation.has_inward_yaw ? 'yes' : 'no'));
-      row.append(cell(observation.yaw_used ? 'yes' : 'no'));
+      row.append(cell(observation.ekf_input ? 'yes' : 'no'));
       row.append(cell(observation.has_ippe_yaw_0
         ? metric(outwardYawDeg(observation.ippe_yaw_0_rad), 2) : '-'));
       row.append(cell(observation.has_ippe_yaw_1
@@ -930,17 +957,16 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
          << ",\"q_angular_acceleration\":"
          << telemetry.ekf_tuning.q_angular_acceleration
          << ",\"q_geometry\":" << telemetry.ekf_tuning.q_geometry
-         << ",\"position_std_xy_m\":"
-         << telemetry.ekf_tuning.position_std_xy_m
+         << ",\"position_std_x_m\":"
+         << telemetry.ekf_tuning.position_std_x_m
+         << ",\"position_std_y_m\":"
+         << telemetry.ekf_tuning.position_std_y_m
          << ",\"position_std_z_m\":"
          << telemetry.ekf_tuning.position_std_z_m
-         << ",\"yaw_std_rad\":" << telemetry.ekf_tuning.yaw_std_rad
-         << ",\"reprojection_rms_scale\":"
-         << telemetry.ekf_tuning.reprojection_rms_scale
-         << ",\"range_noise_scale_per_m\":"
-         << telemetry.ekf_tuning.range_noise_scale_per_m
-         << ",\"minimum_quality\":"
-         << telemetry.ekf_tuning.minimum_quality
+         << ",\"yaw_facing_base_variance_rad2\":"
+         << telemetry.ekf_tuning.yaw_facing_base_variance_rad2
+         << ",\"yaw_facing_log_variance_scale_rad2\":"
+         << telemetry.ekf_tuning.yaw_facing_log_variance_scale_rad2
          << ",\"single_armor_position_variance_scale\":"
          << telemetry.ekf_tuning.single_armor_position_variance_scale
          << ",\"association_position_variance_scale\":"
@@ -959,6 +985,10 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
          << telemetry.ekf_tuning.opposite_slot_penalty
          << ",\"minimum_visibility_cosine\":"
          << telemetry.ekf_tuning.minimum_visibility_cosine
+         << ",\"slot_position_cost_weight\":"
+         << telemetry.ekf_tuning.slot_position_cost_weight
+         << ",\"slot_yaw_cost_weight_m_per_rad\":"
+         << telemetry.ekf_tuning.slot_yaw_cost_weight_m_per_rad
          << ",\"geometry_yaw_consistency_rad\":"
          << telemetry.ekf_tuning.geometry_yaw_consistency_rad
          << ",\"geometry_minimum_baseline_m\":"
@@ -1158,8 +1188,8 @@ std::string telemetryJson(const WebFrameTelemetry& telemetry) {
            << ",\"number_id\":" << measurement.number_id
            << ",\"association_valid\":"
            << (measurement.association_valid ? "true" : "false")
-           << ",\"yaw_used\":"
-           << (measurement.yaw_used ? "true" : "false")
+           << ",\"ekf_input\":"
+           << (measurement.ekf_input ? "true" : "false")
            << ",\"associated_slot\":" << measurement.associated_slot
            << ",\"nis\":" << measurement.nis
            << ",\"predicted_x_T_m\":" << measurement.predicted_x_T_m

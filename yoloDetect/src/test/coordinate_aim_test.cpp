@@ -1,4 +1,5 @@
 #include "control/gimbal_aim_solver.hpp"
+#include "control/dynamic_target_controller.hpp"
 #include "control/static_target_controller.hpp"
 #include "coordinates/coordinate_frames.hpp"
 
@@ -280,6 +281,42 @@ void testStaticTargetFireTimeout() {
           "expired fire request must report timeout");
 }
 
+void testDynamicTargetFollowUsesLatestPrediction() {
+  namespace control = yolo_detect::control;
+  namespace coordinates = yolo_detect::coordinates;
+  const coordinates::CoordinateSnapshot snapshot =
+      coordinates::makeCoordinateSnapshot(identityObservation());
+  require(snapshot.valid, "dynamic-follow snapshot should be valid");
+
+  control::DynamicTargetController controller;
+  const control::DynamicTargetController::TimePoint start{};
+  controller.toggleFollowing();
+  const control::AimTarget first_target{{8.0, 1.0, 1.0}, true, 0.20};
+  const control::DynamicTargetCommand first =
+      controller.update(first_target, snapshot, start);
+  require(first.valid && controller.activeTargetOdomM().has_value(),
+          "dynamic follow must accept the first EKF prediction");
+
+  const control::AimTarget next_target{{8.0, -2.0, 1.2}, true, 0.21};
+  const control::DynamicTargetCommand next =
+      controller.update(next_target, snapshot, start + std::chrono::milliseconds(20));
+  require(next.valid && controller.activeTargetOdomM().has_value() &&
+              cv::norm(*controller.activeTargetOdomM() - next_target.center_odom_m) < 1e-12,
+          "dynamic follow must use the latest predicted armor instead of latching");
+
+  controller.requestFire(start + std::chrono::milliseconds(20));
+  auto aligned_observation = identityObservation();
+  aligned_observation.gimbal_yaw_rad = next.aim.yaw_command_deg * kPi / 180.0;
+  aligned_observation.gimbal_elevation_rad =
+      (next.aim.pitch_command_deg - 90.0) * kPi / 180.0;
+  const coordinates::CoordinateSnapshot aligned_snapshot =
+      coordinates::makeCoordinateSnapshot(aligned_observation);
+  const control::DynamicTargetCommand fire = controller.update(
+      next_target, aligned_snapshot, start + std::chrono::milliseconds(30));
+  require(fire.valid && fire.fire,
+          "dynamic fire must require and honor gimbal alignment");
+}
+
 }  // namespace
 
 // 运行全部坐标与云台瞄准单元测试。
@@ -293,6 +330,7 @@ int main() {
     testUnreachableTargetRejected();
     testStaticTargetFollowAndSingleFire();
     testStaticTargetFireTimeout();
+    testDynamicTargetFollowUsesLatestPrediction();
     std::cout << "coordinate and gimbal aim tests passed\n";
     return 0;
   } catch (const std::exception& error) {

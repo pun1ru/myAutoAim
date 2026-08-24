@@ -88,7 +88,8 @@ struct WebTrackerMeasurementTelemetry {
   int color_id = -1;
   int number_id = -1;
   bool association_valid = false;
-  bool yaw_used = false;
+  // True only for the one measurement selected to correct the EKF this frame.
+  bool ekf_input = false;
   int associated_slot = -1;
   double nis = 0.0;
   double predicted_x_T_m = 0.0;
@@ -112,12 +113,11 @@ struct WebEkfTuningTelemetry {
   double q_linear_acceleration = 0.02;
   double q_angular_acceleration = 1.0;
   double q_geometry = 0.0;
-  double position_std_xy_m = 0.03;
+  double position_std_x_m = 0.03;
+  double position_std_y_m = 0.03;
   double position_std_z_m = 0.08;
-  double yaw_std_rad = 0.12;
-  double reprojection_rms_scale = 0.15;
-  double range_noise_scale_per_m = 0.025;
-  double minimum_quality = 0.05;
+  double yaw_facing_base_variance_rad2 = 9e-2;
+  double yaw_facing_log_variance_scale_rad2 = 1.0 / 200.0;
   double single_armor_position_variance_scale = 25.0;
   double association_position_variance_scale = 100.0;
   double maximum_multi_armor_position_residual_m = 0.18;
@@ -127,6 +127,8 @@ struct WebEkfTuningTelemetry {
   double adjacent_slot_penalty = 0.5;
   double opposite_slot_penalty = 4.0;
   double minimum_visibility_cosine = -0.35;
+  double slot_position_cost_weight = 1.0;
+  double slot_yaw_cost_weight_m_per_rad = 0.20;
   double geometry_yaw_consistency_rad = 0.35;
   double geometry_minimum_baseline_m = 0.08;
   int geometry_confirming_frames = 1;

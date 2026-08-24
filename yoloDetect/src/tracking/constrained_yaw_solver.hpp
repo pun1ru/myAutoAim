@@ -19,7 +19,7 @@ enum class ReliableYawStatus {
 struct ConstrainedYawOptions {
   // sp_vision_25-style constrained reprojection search. The center remains
   // the PnP center; only the candidate armor orientation is changed.
-  double search_half_range_rad = 90.0 * 3.14159265358979323846 / 180.0;
+  double search_half_range_rad = 70.0 * 3.14159265358979323846 / 180.0;
   double search_step_rad = 1.0 * 3.14159265358979323846 / 180.0;
   double armor_pitch_rad = 15.0 * 3.14159265358979323846 / 180.0;
   double outpost_pitch_rad = -15.0 * 3.14159265358979323846 / 180.0;
