@@ -573,9 +573,15 @@ void testLostPredictionAndReset() {
   state.x[tracking::VelocityX] = 2.0;
   const std::uint64_t t0 = 3'000'000'000ULL;
   initializeTracker(ekf, state, t0);
-  const tracking::TrackOutput reset = ekf.update(t0 + 20'000'000ULL, {});
+  const tracking::TrackOutput first_miss =
+      ekf.update(t0 + 20'000'000ULL, {});
+  require(first_miss.has_state &&
+              first_miss.tracking_state == tracking::TrackingState::TemporarilyLost,
+          "a one-frame detector blackout must preserve E0 and the track");
+  static_cast<void>(ekf.update(t0 + 40'000'000ULL, {}));
+  const tracking::TrackOutput reset = ekf.update(t0 + 60'000'000ULL, {});
   require(!reset.has_state && reset.tracking_state == tracking::TrackingState::Lost,
-          "losing armor observations must immediately reset E0 and the track");
+          "sustained missing observations must reset E0 and the track");
 }
 
 void testJosephCovariance() {

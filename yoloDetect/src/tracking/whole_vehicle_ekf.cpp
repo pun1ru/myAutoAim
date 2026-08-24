@@ -717,24 +717,12 @@ bool WholeVehicleEkf::applyJointUpdate(
         return !last_associated_slots_[static_cast<std::size_t>(
             association.armor_slot)];
       });
-  const bool has_large_yaw_phase_correction = std::any_of(
-      associations.begin(), associations.end(),
-      [&](const Association& association) {
-        if (!association.includes_yaw) return false;
-        const Measurement& measurement = measurements[static_cast<std::size_t>(
-            association.measurement_index)];
-        const double yaw_innovation = wrapToPi(
-            measurement.inward_yaw_T_rad -
-            observe(prior, association.armor_slot).inward_yaw_T_rad);
-        return std::abs(yaw_innovation) >
-               0.5 * options_.maximum_yaw_update_innovation_rad;
-      });
-  if (has_slot_transition || has_large_yaw_phase_correction) {
+  if (has_slot_transition) {
     // A newly selected slot contains a discrete pi/2 phase change. Do not
-    // interpret that phase change as angular acceleration. A large yaw phase
-    // correction may still move theta onto a newly visible plate, but must not
-    // flip omega. Once the slot and yaw residual are stable, subsequent frames
-    // may update omega normally.
+    // interpret that discrete slot phase change as angular acceleration. A
+    // large continuous yaw innovation is still allowed to correct omega: at
+    // high spin rates it is often the signal that the tracked angular speed
+    // is lagging behind the target.
     gain.row(Omega).setZero();
   }
   if (!position_observable) {
@@ -899,14 +887,6 @@ TrackOutput WholeVehicleEkf::update(
       return makeOutput(timestamp_ns);
     }
   }
-  // E0 belongs to the currently visible target. Losing all armor detections
-  // resets it immediately; cross-target handoff is intentionally not handled.
-  if (has_state_ && measurements.empty()) {
-    reset();
-    tracking_state_ = TrackingState::Lost;
-    return makeOutput(timestamp_ns);
-  }
-
   // 未初始化时只接受可靠 yaw；position-only 量测不会凭空确定整车朝向。
   if (!has_state_) {
     for (std::size_t measurement_index = 0;
@@ -1007,9 +987,7 @@ TrackOutput WholeVehicleEkf::update(
 
   consecutive_hits_ = 0;
   ++consecutive_misses_;
-  const double since_hit_s = static_cast<double>(timestamp_ns - last_hit_timestamp_ns_) * 1e-9;
-  if (consecutive_misses_ > options_.lost_frame_limit ||
-      since_hit_s > options_.lost_time_limit_s) {
+  if (consecutive_misses_ > options_.lost_frame_limit) {
     reset();
     tracking_state_ = TrackingState::Lost;
   } else {

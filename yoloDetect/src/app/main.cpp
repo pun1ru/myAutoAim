@@ -723,7 +723,8 @@ std::optional<cv::Point> projectTrackerPoint(
 void drawPredictedArmorCenters(
     cv::Mat& image, const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::coordinates::CoordinateSnapshot& exposure_snapshot,
-    const yolo_detect::CameraCalibration& calibration) {
+    const yolo_detect::CameraCalibration& calibration,
+    const std::optional<int>& firing_slot = std::nullopt) {
   if (!tracker_output.has_state || !exposure_snapshot.valid) return;
   for (const yolo_detect::tracking::DecodedArmor& armor :
        tracker_output.predicted_armors) {
@@ -732,11 +733,14 @@ void drawPredictedArmorCenters(
     if (!projected) continue;
     const cv::Point center = *projected;
     cv::circle(image, center, 5, cv::Scalar(0, 0, 0), cv::FILLED, cv::LINE_AA);
-    cv::circle(image, center, 3, cv::Scalar(0, 255, 255), cv::FILLED,
+    const bool firing = firing_slot && *firing_slot == armor.armor_slot;
+    const cv::Scalar point_color = firing ? cv::Scalar(0, 0, 255)
+                                         : cv::Scalar(0, 255, 255);
+    cv::circle(image, center, 3, point_color, cv::FILLED,
                cv::LINE_AA);
     cv::putText(image, "E" + std::to_string(armor.armor_slot),
                 center + cv::Point(7, -7), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                cv::Scalar(0, 255, 255), 2, cv::LINE_AA);
+                point_color, 2, cv::LINE_AA);
   }
 }
 
@@ -789,7 +793,7 @@ std::optional<yolo_detect::control::AimTarget> makeDynamicAimTarget(
     const yolo_detect::tracking::TrackOutput& tracker_output,
     const yolo_detect::coordinates::CoordinateSnapshot& snapshot,
     const yolo_detect::control::GimbalAimSolver& aim_solver,
-    double prediction_delay_s) {
+    double prediction_delay_s, int* selected_slot) {
   if (!tracker_output.has_state || !snapshot.valid ||
       !std::isfinite(prediction_delay_s) || prediction_delay_s < 0.0) {
     return std::nullopt;
@@ -821,6 +825,7 @@ std::optional<yolo_detect::control::AimTarget> makeDynamicAimTarget(
       if (std::isfinite(facing) && facing > best_facing) {
         best_facing = facing;
         best_armor = armor;
+        if (selected_slot != nullptr) *selected_slot = armor.armor_slot;
       }
     }
     if (!best_armor) return std::nullopt;
@@ -1846,9 +1851,10 @@ int main(int argc, char** argv) {
             detection_aims.begin(), detection_aims.end(),
             [](const DetectionAim& item) { return item.aim.valid; }));
 
+    int dynamic_slot = -1;
     const std::optional<yolo_detect::control::AimTarget> dynamic_target =
         makeDynamicAimTarget(tracker_output, coordinate_snapshot, aim_solver,
-                             dynamic_prediction_delay_s);
+                             dynamic_prediction_delay_s, &dynamic_slot);
     const yolo_detect::control::DynamicTargetCommand gimbal_command =
         gimbal_control.update(dynamic_target, coordinate_snapshot);
     if (gimbal_command.valid) {
@@ -1875,8 +1881,12 @@ int main(int argc, char** argv) {
                       detection_aims[index], camera_calibration,
                       options.keypoint_confidence);
       }
+      const std::optional<int> firing_slot =
+          gimbal_command.fire && dynamic_slot >= 0
+              ? std::optional<int>(dynamic_slot)
+              : std::nullopt;
       drawPredictedArmorCenters(annotated, tracker_output, coordinate_snapshot,
-                                camera_calibration);
+                                camera_calibration, firing_slot);
       drawProjectionDebugCenters(annotated, projection_debug,
                                  projection_reference, coordinate_snapshot,
                                  camera_calibration);

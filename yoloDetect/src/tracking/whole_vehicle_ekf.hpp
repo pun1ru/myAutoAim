@@ -205,8 +205,9 @@ struct WholeVehicleEkfOptions {
   double nis_gate_4d = 9.488;
   // 状态机确认、丢失和时间跳变策略。
   int confirming_hits = 3;
-  // Keep the time threshold dominant at high detector frame rates.
-  int lost_frame_limit = 300;
+  // A detector blackout during fast rotation must not redefine E0. Reset only
+  // after this many consecutive missed frames; time is diagnostic only.
+  int lost_frame_limit = 20;
   double lost_time_limit_s = 1.5;
   double maximum_frame_dt_s = 0.25;
   // sqrt([1,64,1,64,1,64,0.4,100,1,1,1]), matching sp_vision_25's
