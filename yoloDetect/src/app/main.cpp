@@ -46,12 +46,38 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
+enum class ModelProfile {
+  SzuSim,
+  Robot0526,
+  Robot0708,
+  SpvisionBest2Sim,
+  ArmorPose0815,
+};
+
+struct ModelProfileDefinition {
+  const char* name;
+  const char* filename;
+  int input_size;
+};
+
+constexpr std::array<ModelProfileDefinition, 6> kModelProfiles = {{
+    {"szu-sim", "szu_best2_sim_416.onnx", 640},
+    {"robot-0526", "robot_armor_0526.onnx", 640},
+    {"robot-0708", "robot_armor_0708.onnx", 640},
+    {"spvision-best2-sim", "spvision_best2_sim.onnx", 640},
+    {"armor-pose-0815", "armor_pose_0815_640.onnx", 640},
+    {"armor-pose-0815-export", "armor_pose_0815_4pt_640_export.onnx", 640},
+}};
+
 struct Options {
   std::string host = "127.0.0.1";
   std::uint16_t port = daedalus_sdk::kTcpImagePort;
   std::uint16_t control_port = daedalus_sdk::kUdpSceneControlPort;
   std::uint16_t gimbal_port = daedalus_sdk::kUdpCommandPort;
   std::filesystem::path model;
+  std::optional<ModelProfile> model_profile;
+  bool model_explicit = false;
+  bool input_size_explicit = false;
   float confidence = 0.70F;
   float keypoint_confidence = 0.25F;
   yolo_detect::ArmorSize armor_size = yolo_detect::ArmorSize::Small;
@@ -118,7 +144,28 @@ std::filesystem::path defaultModelPath(const char* executable) {
   std::error_code error;
   std::filesystem::path path = std::filesystem::absolute(executable, error);
   if (error) path = executable;
-  return path.parent_path() / "szu_best2_sim_416.onnx";
+  return path.parent_path() / "robot_armor_0526.onnx";
+}
+
+std::optional<ModelProfile> parseModelProfile(std::string_view name) {
+  for (std::size_t index = 0; index < kModelProfiles.size(); ++index) {
+    if (name == kModelProfiles[index].name) {
+      return static_cast<ModelProfile>(index);
+    }
+  }
+  return std::nullopt;
+}
+
+const ModelProfileDefinition& modelProfileDefinition(ModelProfile profile) {
+  return kModelProfiles.at(static_cast<std::size_t>(profile));
+}
+
+std::filesystem::path modelProfilePath(const char* executable,
+                                       ModelProfile profile) {
+  std::error_code error;
+  std::filesystem::path path = std::filesystem::absolute(executable, error);
+  if (error) path = executable;
+  return path.parent_path() / modelProfileDefinition(profile).filename;
 }
 
 // Windows development normally keeps yoloDetect and the simulator package in
@@ -166,7 +213,9 @@ void printUsage() {
   std::cout
       << "Daedalus YOLO armor pose detector\n\n"
       << "Usage: yolo_detect [options]\n"
-      << "  --model <path>       ONNX model (default: szu_best2_sim_416)\n"
+      << "  --model <path>       Custom ONNX model (default: robot_armor_0526)\n"
+      << "  --model-profile <name> Built-in model: szu-sim, robot-0526, robot-0708,\n"
+      << "                       spvision-best2-sim, armor-pose-0815, or armor-pose-0815-export\n"
       << "  --host <address>     SDK image host (default: 127.0.0.1)\n"
       << "  --port <port>        SDK image port (default: 5602)\n"
       << "  --control-port <port> Scene control UDP port (default: 5603)\n"
@@ -175,7 +224,7 @@ void printUsage() {
       << "  --kpt-conf <0..1>    Point/PnP confidence (default: 0.25)\n"
       << "  --armor-size <name>  PnP plate model: small or large (default: small)\n"
       << "  --nms <0..1>         NMS IoU threshold (default: 0.45)\n"
-      << "  --imgsz <pixels>     Square model input size (default: 416)\n"
+      << "  --imgsz <pixels>     Square model input size (profile default if selected)\n"
       << "  --width <pixels>     Display width (default: 1100)\n"
       << "  --web <port>         Serve annotated MJPEG frames over HTTP\n"
       << "  --web-bind <address> Web bind address (default: 127.0.0.1)\n"
@@ -234,7 +283,6 @@ Options parseOptions(int argc, char** argv) {
   options.model = defaultModelPath(argv[0]);
   options.ipc_directory = defaultIpcDirectory(argv[0]);
   options.use_cuda = !options.cuda_library_directory.empty();
-  options.input_size = 416;
   for (int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if (argument == "--help" || argument == "-h") {
@@ -243,6 +291,14 @@ Options parseOptions(int argc, char** argv) {
     }
     if (argument == "--model") {
       options.model = requireValue(index, argc, argv);
+      options.model_explicit = true;
+    } else if (argument == "--model-profile") {
+      const std::string value = requireValue(index, argc, argv);
+      const std::optional<ModelProfile> profile = parseModelProfile(value);
+      if (!profile) {
+        throw std::runtime_error("unknown model-profile: " + value);
+      }
+      options.model_profile = *profile;
     } else if (argument == "--host") {
       options.host = requireValue(index, argc, argv);
     } else if (argument == "--port") {
@@ -282,6 +338,7 @@ Options parseOptions(int argc, char** argv) {
       options.nms = parseUnitFloat(requireValue(index, argc, argv), "nms");
     } else if (argument == "--imgsz") {
       options.input_size = std::stoi(requireValue(index, argc, argv));
+      options.input_size_explicit = true;
       if (options.input_size < 32 || options.input_size > 2048) {
         throw std::runtime_error("imgsz must be in [32, 2048]");
       }
@@ -405,6 +462,15 @@ Options parseOptions(int argc, char** argv) {
     } else {
       throw std::runtime_error("unknown argument: " + argument);
     }
+  }
+  if (options.model_profile) {
+    if (options.model_explicit) {
+      throw std::runtime_error("--model and --model-profile cannot be used together");
+    }
+    const ModelProfileDefinition& profile =
+        modelProfileDefinition(*options.model_profile);
+    options.model = modelProfilePath(argv[0], *options.model_profile);
+    if (!options.input_size_explicit) options.input_size = profile.input_size;
   }
   return options;
 }

@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -51,6 +52,17 @@ float sigmoid(float value) {
   }
   const float e = std::exp(value);
   return e / (1.0F + e);
+}
+
+std::string tensorShapeString(const std::vector<std::int64_t>& shape) {
+  std::ostringstream stream;
+  stream << '[';
+  for (std::size_t index = 0; index < shape.size(); ++index) {
+    if (index != 0) stream << ',';
+    stream << shape[index];
+  }
+  stream << ']';
+  return stream.str();
 }
 
 // 计算按置信度排序的非极大值抑制所需的重叠度。
@@ -252,6 +264,15 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
     throw std::runtime_error("unexpected YOLO output rank");
   }
 
+  const float* output = outputs[0].GetTensorData<float>();
+  const bool five_keypoint_channel_first = output_shape[1] == 15;
+  const bool five_keypoint_channel_last = output_shape[2] == 15;
+  if (five_keypoint_channel_first || five_keypoint_channel_last) {
+    throw std::runtime_error(
+        "15-value model output contains one score and five XY keypoints; "
+        "it cannot be used for four-corner armor PnP without a documented "
+        "four-corner mapping");
+  }
   const bool pose_channel_first = output_shape[1] == kExpectedValues;
   const bool pose_channel_last = output_shape[2] == kExpectedValues;
   const bool robot_channel_first = output_shape[1] == kRobotValues;
@@ -268,13 +289,13 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
                   : (szu_model ? szu_channel_last : pose_channel_last);
   if (!channel_first && !channel_last) {
     throw std::runtime_error(
-        "unexpected output: expected 16 (SZU YOLOv8), 17 (YOLO Pose), or 22 (0526 armor) values per candidate");
+        "unexpected output shape " + tensorShapeString(output_shape) +
+        ": expected 14 (SZU YOLOv8), 17 (YOLO Pose), or 22 (robot armor) values per candidate");
   }
   const int values_per_candidate =
       robot_model ? kRobotValues : (szu_model ? kSzuValues : kExpectedValues);
   const int candidate_count = static_cast<int>(
       channel_first ? output_shape[2] : output_shape[1]);
-  const float* output = outputs[0].GetTensorData<float>();
   const auto value_at = [&](int candidate, int value) {
     return channel_first
                ? output[static_cast<std::size_t>(value) * candidate_count +
@@ -360,8 +381,8 @@ std::vector<ArmorDetection> YoloPoseDetector::detect(const cv::Mat& bgr) {
                        std::max(1.0F, bottom_right.x - top_left.x),
                        std::max(1.0F, bottom_right.y - top_left.y)};
       if (szu_model) {
-        // Shenzhen University's 416px YOLOv8 export stores four XY keypoints
-        // after two class scores. Normalize their geometric order for PnP.
+        // Shenzhen University's YOLOv8 export stores four XY keypoints after
+        // two class scores. Normalize their geometric order for PnP.
         std::array<cv::Point2f, KeypointCount> native_points;
         for (std::size_t point_index = 0; point_index < KeypointCount;
              ++point_index) {

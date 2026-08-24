@@ -184,6 +184,46 @@ if(WIN32)
     )
   endif()
 
+  set(YOLO_DETECT_ROBOT_0708_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../trains/models/legacy_robot_detection/0708.onnx")
+  if(EXISTS "${YOLO_DETECT_ROBOT_0708_MODEL}")
+    add_custom_command(TARGET yolo_detect POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${YOLO_DETECT_ROBOT_0708_MODEL}"
+        "$<TARGET_FILE_DIR:yolo_detect>/robot_armor_0708.onnx"
+    )
+  endif()
+
+  set(YOLO_DETECT_SPVISION_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../sp_vision_25/assets/best2-sim.onnx")
+  if(EXISTS "${YOLO_DETECT_SPVISION_MODEL}")
+    add_custom_command(TARGET yolo_detect POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${YOLO_DETECT_SPVISION_MODEL}"
+        "$<TARGET_FILE_DIR:yolo_detect>/spvision_best2_sim.onnx"
+    )
+  endif()
+
+  set(YOLO_DETECT_ARMOR_POSE_0815_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/models/armor_pose_0815_640.onnx")
+  if(EXISTS "${YOLO_DETECT_ARMOR_POSE_0815_MODEL}")
+    add_custom_command(TARGET yolo_detect POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${YOLO_DETECT_ARMOR_POSE_0815_MODEL}"
+        "$<TARGET_FILE_DIR:yolo_detect>/armor_pose_0815_640.onnx"
+    )
+  endif()
+
+  set(YOLO_DETECT_ARMOR_POSE_0815_EXPORT_MODEL
+      "${CMAKE_CURRENT_SOURCE_DIR}/../../trains/results/armor_pose_0815/weights/armor_pose_0815_4pt_640_export.onnx")
+  if(EXISTS "${YOLO_DETECT_ARMOR_POSE_0815_EXPORT_MODEL}")
+    add_custom_command(TARGET yolo_detect POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${YOLO_DETECT_ARMOR_POSE_0815_EXPORT_MODEL}"
+        "$<TARGET_FILE_DIR:yolo_detect>/armor_pose_0815_4pt_640_export.onnx"
+    )
+  endif()
+
   set(YOLO_DETECT_ZLIB_DLL
       "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/z.dll")
   if(EXISTS "${YOLO_DETECT_ZLIB_DLL}")

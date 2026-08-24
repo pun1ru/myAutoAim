@@ -39,7 +39,7 @@ cmake --build .\yoloDetect\build\windows-vs2022 --config Release
 ctest --test-dir .\yoloDetect\build\windows-vs2022 -C Release --output-on-failure
 ```
 
-默认模型为 `models/szu_best2_sim_416.onnx`（深圳大学模型）。构建时会将它和所需运行时 DLL 复制到
+默认模型为 `robot_armor_0526.onnx`。构建时会将内置模型和所需运行时 DLL 复制到
 可执行文件旁。CUDA 12.6 和 cuDNN 9 运行时 DLL 从
 `trains/.venv/Lib/site-packages/torch/lib` 加载。可通过 `--model <path>` 覆盖默认模型。
 
@@ -79,8 +79,17 @@ Keep the OpenCV desktop window disabled while retaining the web page:
 .\yoloDetect\run-windows.ps1 -NoDisplay -WebPort 8080
 ```
 
-The launcher uses the local `trains\models\legacy_robot_detection\0526.onnx`
-with `--imgsz 640` by default. Use `-Model <path>` to override it.
+The launcher defaults to the `robot-0526` profile. Available profiles are
+`robot-0526`, `robot-0708`, `spvision-best2-sim`, `armor-pose-0815`,
+`armor-pose-0815-export`, and `szu-sim`; select one with `-ModelProfile <name>`. Use `-Model <path>` for a
+custom ONNX model, plus `-ImageSize <pixels>` when its input is not 640.
+
+`armor-pose-0815` is a four-corner YOLO Pose model and is supported by the
+PnP/EKF pipeline. The bundled `spvision-best2-sim` ONNX exposes five XY
+keypoints rather than a documented four-corner armor layout, so the pose
+pipeline rejects it explicitly instead of feeding incorrect corners to PnP.
+`armor-pose-0815-export` is the verified 640 px four-keypoint ONNX exported
+from `trains/results/armor_pose_0815/weights/best.pt`.
 
 `--ipc-dir` still overrides the automatic Windows IPC path, and all tracking,
 prediction, gimbal, and fire-control behavior is unchanged.

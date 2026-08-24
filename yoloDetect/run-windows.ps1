@@ -5,7 +5,11 @@ param(
     [switch]$NoDisplay,
     [ValidateRange(0, 65535)]
     [int]$WebPort = 0,
+    [ValidateSet('robot-0526', 'robot-0708', 'spvision-best2-sim', 'armor-pose-0815', 'armor-pose-0815-export', 'szu-sim')]
+    [string]$ModelProfile = 'robot-0526',
     [string]$Model,
+    [ValidateRange(0, 2048)]
+    [int]$ImageSize = 0,
     [switch]$SkipBuild
 )
 
@@ -17,7 +21,6 @@ $simulatorRoot = Join-Path $workspaceRoot '1.1.1'
 $simulatorLauncher = Join-Path $simulatorRoot 'start-simulator.ps1'
 $ipcDirectory = Join-Path $simulatorRoot 'runtime\talos-ipc'
 $detector = Join-Path $projectRoot 'build\windows-vs2022\Release\yolo_detect.exe'
-$defaultModel = Join-Path $workspaceRoot 'trains\models\legacy_robot_detection\0526.onnx'
 
 if (-not (Test-Path -LiteralPath $simulatorLauncher)) {
     throw "Windows simulator launcher is missing: $simulatorLauncher"
@@ -92,15 +95,19 @@ if (-not $imageTransportReady) {
 }
 
 $arguments = @('--ipc-dir', $ipcDirectory)
-$arguments += @('--imgsz', '640')
 if ($Cpu) { $arguments += '--cpu' }
 if ($NoDisplay) { $arguments += '--no-display' }
 if ($WebPort -ne 0) { $arguments += @('--web', $WebPort) }
-if ([string]::IsNullOrWhiteSpace($Model)) { $Model = $defaultModel }
-if (-not (Test-Path -LiteralPath $Model)) {
-    throw "ONNX model is missing: $Model"
+if ([string]::IsNullOrWhiteSpace($Model)) {
+    $arguments += @('--model-profile', $ModelProfile)
+} else {
+    if (-not (Test-Path -LiteralPath $Model)) {
+        throw "ONNX model is missing: $Model"
+    }
+    $arguments += @('--model', $Model)
+    if ($ImageSize -eq 0) { $ImageSize = 640 }
 }
-$arguments += @('--model', $Model)
+if ($ImageSize -ne 0) { $arguments += @('--imgsz', $ImageSize) }
 
 Write-Host "Starting yoloDetect with IPC directory: $ipcDirectory"
 & $detector @arguments
