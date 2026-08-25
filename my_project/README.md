@@ -26,7 +26,7 @@ exposure-synchronized gimbal state, and displays transport statistics.
 OpenCV is installed through the project-local vcpkg checkout in `downloads`.
 
 ```powershell
-Set-Location 'C:\Users\liaoz\AppData\Local\DaedalusSimulator\my_project'
+Set-Location 'E:\DaedalusSimulator\myAutoAim\my_project'
 cmake --preset windows-vs2022
 cmake --build --preset windows-release
 ctest --preset windows-release
@@ -37,14 +37,14 @@ ctest --preset windows-release
 Start Daedalus first:
 
 ```powershell
-Set-Location 'C:\Users\liaoz\AppData\Local\DaedalusSimulator\1.1.1'
+Set-Location 'E:\DaedalusSimulator\1.1.1'
 .\start-simulator.ps1
 ```
 
 Then run the viewer from another PowerShell window:
 
 ```powershell
-Set-Location 'C:\Users\liaoz\AppData\Local\DaedalusSimulator\my_project'
+Set-Location 'E:\DaedalusSimulator\myAutoAim\my_project'
 .\build\windows-vs2022\Release\daedalus_image_viewer.exe `
   --ipc-dir '..\1.1.1\runtime\talos-ipc'
 ```

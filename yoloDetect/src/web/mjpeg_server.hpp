@@ -134,8 +134,8 @@ struct WebEkfTuningTelemetry {
   int geometry_confirming_frames = 1;
   double nis_gate_3d = 7.815;
   double nis_gate_4d = 9.488;
-  double maximum_angular_speed_rad_s = 3.0;
-  double maximum_omega_correction_rad_s = 0.05;
+  double maximum_angular_speed_rad_s = 12.0;
+  double maximum_omega_correction_rad_s = 0.5;
   double yaw_max_reprojection_rms_px = 4.0;
   double yaw_max_std_rad = 0.45;
   double yaw_min_facing_cosine = 0.65;

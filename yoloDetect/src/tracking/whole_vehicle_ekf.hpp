@@ -217,8 +217,9 @@ struct WholeVehicleEkfOptions {
   double initial_theta_std_rad = 0.6324555320336759;
   double initial_omega_std_rad_s = 10.0;
   double initial_geometry_std_m = 1.0;
-  double maximum_angular_speed_rad_s = 6.0;
-  double maximum_omega_correction_rad_s = 0.15;
+  // 10 rad/s is a reachable chassis speed; retain margin for estimation error.
+  double maximum_angular_speed_rad_s = 12.0;
+  double maximum_omega_correction_rad_s = 0.5;
   double maximum_multi_armor_position_residual_m = 0.18;
 };
 

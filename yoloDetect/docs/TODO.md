@@ -26,7 +26,7 @@
 
 - [x] 保持现有过程模型和基础过程噪声设置不变。
 - [x] 保持观测量为 `x, y, z, yaw`，并将 `Rx`、`Ry`、`Rz` 拆分为独立、可实时调节的观测方差。
-- [x] 参考 `C:\Users\liaoz\AppData\Local\DaedalusSimulator\sp_vision_25` 中的 `Ryaw` 噪声设置，实现与装甲板正对相机角度相关的 `Rtheta`。
+- [x] 参考 `E:\DaedalusSimulator\sp_vision_25` 中的 `Ryaw` 噪声设置，实现与装甲板正对相机角度相关的 `Rtheta`。
 - [x] 在预测 yaw 参与任何差分、角速度计算或状态更新前进行角度环绕；禁止累积为数千度的未环绕角度。
 - [x] 明确并测试 yaw 创新量使用最短环绕角差。
 
